@@ -1,0 +1,42 @@
+# Node / Next.js
+node_modules/
+.next/
+.out/
+.vercel/
+
+# Build outputs
+build/
+dist/
+coverage/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Prisma/SQLite local dev
+data.db
+*.sqlite
+*.sqlite-journal
+prisma/dev.db
+
+# Misc
+*.local
+*.log
+.tmp/
+.cache/
+
+# App specific
+public/uploads/
+public/assets/*.map

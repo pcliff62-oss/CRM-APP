@@ -1,0 +1,38 @@
+/* eLink UI Overrides (safe to edit)
+   - Hot-reloaded in dev; loaded at runtime without rebuild
+   - Add visual tweaks here; no JS needed
+*/
+
+/* Ensure pills are visible */
+.proposal-html .price-choice { display: inline-flex !important; visibility: visible !important; align-items: center; gap: 8px; }
+.proposal-html .price-choice input[type="checkbox"] { width: 18px; height: 18px; accent-color: #334155; }
+
+/* Bubble look for price-choice labels */
+.proposal-html label.price-choice {
+   padding: 4px 10px;
+   border: 1px solid #cbd5e1; /* slate-300 */
+   border-radius: 9999px;
+   background: #f8fafc; /* slate-50 */
+   font-weight: 600;
+}
+.proposal-html label.price-choice.gbb { border-color: #94a3b8; }
+.proposal-html label.price-choice > span { line-height: 1; }
+
+/* Optional styling tweak */
+.proposal-html .price-choice { border-color: #94a3b8; /* slate-400 */ }
+
+/* Blue section divider height (example) */
+.section-divider { height: 10px; }
+
+/* Signature image scale (example) */
+.signature-overlay { max-width: 60%; }
+
+/* Keep invisible filler cells from affecting layout */
+.proposal-html td.gbb-filler, .proposal-html th.gbb-filler {
+   border: none !important;
+   padding: 0 !important;
+   width: 0.1px !important; /* collapse width but avoid 0 for some browsers */
+   min-width: 0 !important;
+   max-width: 0 !important;
+   overflow: hidden !important;
+}

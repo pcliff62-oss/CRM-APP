@@ -1,0 +1,12 @@
+body{font:400 14px/1.35 "Times New Roman",Times,serif;background:#fff;margin:0;padding:16px}
+h1,h2,h3,h4,h5,h6,p,span,div,li,td,th,small,em,strong{font-family:"Times New Roman",Times,serif}
+.brand{display:flex;gap:16px;align-items:center;margin-bottom:16px}
+h1{margin:0 0 4px}
+h2{margin:22px 0 8px}
+.row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #e9ecef}
+.money{font-variant-numeric: tabular-nums}
+.totals{margin-top:12px}
+.totals .grand{font-weight:700;font-size:18px;margin-top:6px}
+.sig-wrap{margin:10px 0;background:#fafafa;border:1px dashed #ccc;padding:8px;width:fit-content}
+.inline{display:flex;gap:16px;flex-wrap:wrap}
+.primary{background:#0b4ec4;color:#fff;border:0;padding:10px 14px;border-radius:6px;cursor:pointer}

@@ -1,0 +1,5 @@
+/* Enforce Times New Roman across proposal HTML render only */
+.proposal-doc .proposal-html,
+.proposal-doc .proposal-html * {
+  font-family: "Times New Roman", Times, serif !important;
+}

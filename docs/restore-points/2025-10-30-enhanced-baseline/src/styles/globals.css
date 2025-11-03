@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Print parity for proposal web DOC */
+@media print {
+  /* Root page sizing similar to US Letter */
+  .proposal-doc {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    background: white !important;
+  }
+  .proposal-doc .max-w-2xl {
+    max-width: 7.5in !important;
+  }
+  .proposal-doc .shadow,
+  .proposal-doc .shadow-md,
+  .proposal-doc .shadow-lg {
+    box-shadow: none !important;
+  }
+  .proposal-doc .rounded-xl,
+  .proposal-doc .rounded,
+  .proposal-doc .border {
+    border-color: #000 !important;
+  }
+  /* Avoid breaking key sections across pages */
+  .proposal-doc section { page-break-inside: avoid; }
+  .proposal-doc .photos-grid { page-break-inside: avoid; }
+  /* Hide interactive-only UI */
+  .proposal-doc select,
+  .proposal-doc input[type="checkbox"],
+  .proposal-doc button { display: none !important; }
+}
+
+:root {
+  --bg: #0b1220;
+}
+
+html, body, #__next {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900;
+}
+
+/* Enforce Times New Roman within rendered proposal HTML only */
+.proposal-doc .proposal-html,
+.proposal-doc .proposal-html * {
+  font-family: "Times New Roman", Times, serif !important;
+}
+
+.container-xl {
+  @apply max-w-7xl mx-auto px-4;
+}
+
+/* FullCalendar weekend shading */
+.fc .fc-day-sat, .fc .fc-day-sun {
+  background-color: #f1f5f9; /* slate-100 */
+}
+/* Ensure time grid background also shaded */
+.fc time-grid .fc-day-sat, .fc time-grid .fc-day-sun,
+.fc .fc-timegrid-col.fc-day-sat, .fc .fc-timegrid-col.fc-day-sun {
+  background-color: #f1f5f9;
+}
+/* Slightly darker strip for month view number cell area */
+.fc .fc-day-sat .fc-daygrid-day-frame, .fc .fc-day-sun .fc-daygrid-day-frame {
+  background-color: #f1f5f9;
+}

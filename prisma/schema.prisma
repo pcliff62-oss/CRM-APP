@@ -1,0 +1,315 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                  String               @id @default(cuid())
+  name                String
+  users               User[]
+  contacts            Contact[]
+  properties          Property[]
+  leads               Lead[]
+  measurements        Measurement[]
+  proposals           Proposal[]
+  appointments        Appointment[]
+  files               File[]
+  measurementVersions MeasurementVersion[]
+  solarInsights       SolarInsight[]
+  droneMissions       DroneMission[]
+  processingJobs      ProcessingJob[]
+  createdAt           DateTime             @default(now())
+}
+
+model User {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  name          String
+  role          String // Owner, Sales, PM, Estimator
+  tenantId      String
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  createdAt     DateTime      @default(now())
+  appointments  Appointment[]
+  assignedLeads Lead[]        @relation("LeadAssignee")
+}
+
+model Property {
+  id            String         @id @default(cuid())
+  tenantId      String
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  contactId     String?
+  contact       Contact?       @relation("ContactProperties", fields: [contactId], references: [id])
+  address1      String
+  address2      String?
+  city          String
+  state         String
+  postal        String
+  lat           Float?
+  lng           Float?
+  createdAt     DateTime       @default(now())
+  leads         Lead[]         @relation("PropertyLeads")
+  measurements  Measurement[]  @relation("PropertyMeasurements")
+  solarInsights SolarInsight[]
+  droneMissions DroneMission[]
+}
+
+model Lead {
+  id            String         @id @default(cuid())
+  tenantId      String
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  contactId     String?
+  contact       Contact?       @relation("ContactLeads", fields: [contactId], references: [id])
+  propertyId    String?
+  property      Property?      @relation("PropertyLeads", fields: [propertyId], references: [id])
+  title         String
+  stage         String         @default("LEAD")
+  source        String?
+  estimator     String?
+  probability   Int? // 0..100
+  assigneeId    String?
+  assignee      User?          @relation("LeadAssignee", fields: [assigneeId], references: [id])
+  category      String?
+  customScope   String?
+  notes         String?
+  contractPrice Float?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  measurements  Measurement[]  @relation("LeadMeasurements")
+  proposals     Proposal[]     @relation("LeadProposals")
+  appointments  Appointment[]  @relation("LeadAppointments")
+  files         File[]
+  solarInsights SolarInsight[]
+  droneMissions DroneMission[]
+}
+
+model Measurement {
+  id               String               @id @default(cuid())
+  tenantId         String
+  tenant           Tenant               @relation(fields: [tenantId], references: [id])
+  leadId           String?
+  lead             Lead?                @relation("LeadMeasurements", fields: [leadId], references: [id])
+  propertyId       String?
+  property         Property?            @relation("PropertyMeasurements", fields: [propertyId], references: [id])
+  // GeoJSON features: polygons/lines with properties (pitch, edge types, etc)
+  geojson          String
+  // Optional: original image path and pixel scale (meters per pixel) to enable manual correction UI
+  sourceImagePath  String?
+  gsdMPerPx        Float?
+  // Cached totals for quick listing
+  totalSquares     Float?
+  totalPerimeterFt Float?
+  wasteFactor      Float? // 0.10 == 10%
+  notes            String?
+  createdAt        DateTime             @default(now())
+  versions         MeasurementVersion[]
+}
+
+model SolarInsight {
+  id           String    @id @default(cuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  propertyId   String?
+  property     Property? @relation(fields: [propertyId], references: [id])
+  leadId       String?
+  lead         Lead?     @relation(fields: [leadId], references: [id])
+  quality      String
+  fetchedAt    DateTime  @default(now())
+  totalM2      Float?
+  totalSquares Float?
+  segmentsJson String // JSON string of segments array
+  rawJson      String // Raw API response for auditing
+}
+
+model Proposal {
+  id           String  @id @default(cuid())
+  tenantId     String
+  tenant       Tenant  @relation(fields: [tenantId], references: [id])
+  leadId       String?
+  lead         Lead?   @relation("LeadProposals", fields: [leadId], references: [id])
+  templateName String
+  // Raw template text with tokens like {{customer.name}}
+  templateBody String
+  mergedHtml   String?
+  status       String  @default("Draft") // Draft/Sent/Accepted
+  // Snapshot of the form state (company, customer, measure, pricing, scope, totals, etc.)
+  snapshotJson String?
+  // Calculated grand total captured at time of send (for quick display)
+  grandTotal   Float?
+
+  // Public signing fields
+  publicId         String?   @unique
+  signToken        String?   @unique
+  signTokenExpires DateTime?
+  signerName       String?
+  signerEmail      String?
+  signatureDataUrl String?
+  signedAt         DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+model Contact {
+  id            String         @id @default(cuid())
+  tenantId      String
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  name          String
+  email         String?
+  phone         String?
+  organization  String?
+  createdAt     DateTime       @default(now())
+  properties    Property[]     @relation("ContactProperties")
+  leads         Lead[]         @relation("ContactLeads")
+  files         File[]
+  droneMissions DroneMission[]
+}
+
+model File {
+  id        String        @id @default(cuid())
+  tenantId  String
+  tenant    Tenant        @relation(fields: [tenantId], references: [id])
+  contactId String?
+  contact   Contact?      @relation(fields: [contactId], references: [id])
+  leadId    String?
+  lead      Lead?         @relation(fields: [leadId], references: [id])
+  missionId String? // drone mission photo linkage
+  mission   DroneMission? @relation(fields: [missionId], references: [id])
+  category  String // "photos" | "documents"
+  folder    String // e.g. Measurements | Proposals | Signed contract | Docs
+  name      String
+  path      String
+  mime      String?
+  size      Int?
+  createdAt DateTime      @default(now())
+}
+
+/// Editor snapshots for measurements to support load/save versions
+model MeasurementVersion {
+  id            String      @id @default(cuid())
+  tenantId      String
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+  measurementId String
+  measurement   Measurement @relation(fields: [measurementId], references: [id])
+  name          String?
+  // Raw JSON payload: { features: Feature[], angleDeg?: number }
+  payloadJson   String
+  createdAt     DateTime    @default(now())
+
+  @@index([tenantId, measurementId, createdAt])
+}
+
+model Appointment {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  title       String
+  description String?
+  start       DateTime
+  end         DateTime
+  allDay      Boolean  @default(false)
+  leadId      String?
+  lead        Lead?    @relation("LeadAppointments", fields: [leadId], references: [id])
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// Planned drone scanning mission for a property (flight path metadata only – actual drone execution handled externally)
+model DroneMission {
+  id             String             @id @default(cuid())
+  tenantId       String
+  tenant         Tenant             @relation(fields: [tenantId], references: [id])
+  leadId         String? // optional link to a lead
+  lead           Lead?              @relation(fields: [leadId], references: [id])
+  propertyId     String?
+  property       Property?          @relation(fields: [propertyId], references: [id])
+  contactId      String? // convenience link
+  contact        Contact?           @relation(fields: [contactId], references: [id])
+  title          String
+  status         String             @default("PLANNED") // PLANNED | IN_PROGRESS | COMPLETE | FAILED
+  altitudeFt     Int? // planned AGL altitude
+  frontOverlap   Int? // % front overlap for photos
+  sideOverlap    Int? // % side overlap for photos
+  captureMode    String? // NADIR | OBLIQUE | FULL
+  pitchDeg       Int? // manual roof pitch (average) degrees
+  pathGeoJson    String // GeoJSON FeatureCollection of LineString(s)/Polygon(s) representing flight path & target area
+  photoCountEst  Int? // estimated number of photos
+  notes          String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  waypoints      DroneWaypoint[]
+  processingJobs ProcessingJob[]
+  telemetry      MissionTelemetry[]
+  events         MissionEvent[]
+  photos         File[]
+}
+
+model DroneWaypoint {
+  id          String       @id @default(cuid())
+  missionId   String
+  mission     DroneMission @relation(fields: [missionId], references: [id])
+  order       Int
+  lat         Float
+  lng         Float
+  altitudeFt  Int?
+  action      String? // e.g. TAKE_PHOTO, START_VIDEO, STOP_VIDEO, ROTATE
+  gimbalPitch Float? // degrees
+  gimbalYaw   Float? // degrees
+  createdAt   DateTime     @default(now())
+
+  @@index([missionId, order])
+}
+
+/// Generic processing job (e.g. photogrammetry stitching) placeholder
+model ProcessingJob {
+  id            String        @id @default(cuid())
+  tenantId      String
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  missionId     String?
+  mission       DroneMission? @relation(fields: [missionId], references: [id])
+  provider      String // e.g. GENERIC
+  providerJobId String? // external provider job identifier
+  status        String        @default("QUEUED") // QUEUED | RUNNING | COMPLETE | FAILED
+  inputJson     String // parameters, references
+  outputJson    String? // results / metrics
+  errorMsg      String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([tenantId, missionId])
+}
+
+/// Individual telemetry points (optionally batched via API) for a mission
+model MissionTelemetry {
+  id          String       @id @default(cuid())
+  missionId   String
+  mission     DroneMission @relation(fields: [missionId], references: [id])
+  ts          DateTime     @default(now())
+  lat         Float
+  lng         Float
+  altAGL      Float?
+  altMSL      Float?
+  heading     Float?
+  gimbalPitch Float?
+  speedMS     Float?
+  batteryPct  Int?
+
+  @@index([missionId, ts])
+}
+
+/// Discrete mission lifecycle or error events
+model MissionEvent {
+  id        String       @id @default(cuid())
+  missionId String
+  mission   DroneMission @relation(fields: [missionId], references: [id])
+  ts        DateTime     @default(now())
+  type      String // START | PAUSE | RESUME | ABORT | COMPLETE | ERROR | RTH
+  meta      String? // JSON blob (error details, battery at event, etc.)
+
+  @@index([missionId, ts])
+  @@index([missionId, type])
+}
