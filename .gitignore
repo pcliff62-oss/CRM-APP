@@ -31,6 +31,14 @@ data.db
 *.sqlite-journal
 prisma/dev.db
 
+# Python / AI worker
+__pycache__/
+*.pyc
+.venv/
+.venv*/
+ai_worker/__pycache__/
+ai_worker/.venv*/
+
 # Misc
 *.local
 *.log
