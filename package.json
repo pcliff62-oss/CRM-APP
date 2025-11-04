@@ -2,6 +2,9 @@
   "name": "hytech-roofing-crm-starter",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "hytech-crm-iphone"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,7 +12,10 @@
     "lint": "next lint",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "seed": "node scripts/seed.cjs",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "field:dev": "npm --workspace hytech-crm-iphone run dev",
+    "field:build": "npm --workspace hytech-crm-iphone run build",
+    "field:preview": "npm --workspace hytech-crm-iphone run preview"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.654.0",
