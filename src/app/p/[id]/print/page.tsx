@@ -43,11 +43,12 @@ export default function ProposalPrint({ params }: { params: { id: string } }) {
   const html = useMemo(() => (tpl ? renderProposalTemplate(tpl, view as any, snapshot as any) : ""), [tpl, view, snapshot]);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const overridesReadyRef = useRef<Promise<void> | null>(null);
 
   // Load overrides (CSS/JS) and run customizer for print view too
   useEffect(() => {
     let removed = false;
-    (async () => {
+    const ensureCss = async () => {
       try {
         const r = await fetch(`/elink-overrides.css?ts=${Date.now()}`, { cache: "no-store" });
         if (!r.ok) return;
@@ -57,19 +58,65 @@ export default function ProposalPrint({ params }: { params: { id: string } }) {
         if (!tag) { tag = document.createElement("style"); tag.id = "elink-overrides-css"; document.head.appendChild(tag); }
         tag.textContent = css;
       } catch {}
-    })();
-    if (!document.getElementById("elink-overrides-js")) {
-      const s = document.createElement("script"); s.id = "elink-overrides-js"; s.src = `/elink-overrides.js?ts=${Date.now()}`; s.async = true; document.body.appendChild(s);
-    }
+    };
+    const ensureJs = () => new Promise<void>((resolve) => {
+      const finish = () => resolve();
+      const waitForGlobal = () => typeof window !== "undefined" && (window as any).elinkCustomize;
+      const startWatcher = () => {
+        if (waitForGlobal()) { finish(); return undefined; }
+        let timer: number | undefined;
+        const stop = () => { if (timer !== undefined) window.clearInterval(timer); };
+        const finalize = () => { stop(); finish(); };
+        timer = window.setInterval(() => {
+          if (removed) { stop(); finish(); return; }
+          if (waitForGlobal()) finalize();
+        }, 50);
+        return finalize;
+      };
+      const existing = document.getElementById("elink-overrides-js") as HTMLScriptElement | null;
+      if (existing) {
+        if (waitForGlobal()) {
+          resolve();
+        } else {
+          const finalize = startWatcher();
+          const done = () => { finalize?.(); };
+          existing.addEventListener("load", done, { once: true });
+          existing.addEventListener("error", done, { once: true });
+        }
+        return;
+      }
+      const s = document.createElement("script");
+      s.id = "elink-overrides-js";
+      s.src = `/elink-overrides.js?ts=${Date.now()}`;
+      s.async = false;
+      const finalize = startWatcher();
+      const done = () => { finalize?.(); };
+      s.addEventListener("load", done, { once: true });
+      s.addEventListener("error", done, { once: true });
+      document.body.appendChild(s);
+    });
+    overridesReadyRef.current = Promise.all([ensureCss(), ensureJs()]).then(() => {});
     return () => { removed = true; };
   }, []);
 
   useEffect(() => {
     const root = containerRef.current; if (!root) return;
-    try {
-      // @ts-ignore
-      window.elinkCustomize?.(root, { snapshot, proposal: null });
-    } catch {}
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const ready = overridesReadyRef.current;
+        if (ready) {
+          await ready;
+        }
+      } catch {}
+      if (cancelled) return;
+      try {
+        // @ts-ignore
+        window.elinkCustomize?.(root, { snapshot, proposal: null });
+      } catch {}
+    };
+    run();
+    return () => { cancelled = true; };
   }, [html, snapshot]);
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading…</div>;

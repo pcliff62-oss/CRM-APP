@@ -60,66 +60,69 @@
     const applyMapping = (row) => {
       if (row.__gbbApplying) return; // prevent re-entrancy from our own DOM writes
       row.__gbbApplying = true;
-      const cells = Array.from(row.querySelectorAll('td,th'));
-      if (!cells.length) return;
+      try {
+        const cells = Array.from(row.querySelectorAll('td,th'));
+        if (!cells.length) return;
 
-      // 1) Choose targets: prefer label + next 3; fallback rightmost 3 numeric clustered
-      let targets = null;
-      let labelIdx = cells.findIndex(c => /TOTAL\s+INVESTMENT\s*:?/i.test(c.textContent || ''));
-      if (labelIdx >= 0 && cells.length >= labelIdx + 4) {
-        const tri = [labelIdx + 1, labelIdx + 2, labelIdx + 3];
-        if (tri.every(i => moneyCell(cells[i]))) targets = tri;
-      }
-      if (!targets) {
-        const idxs = [];
-        for (let i = 0; i < cells.length; i++) if (moneyCell(cells[i])) idxs.push(i);
-        if (idxs.length >= 3) {
-          const trio = idxs.slice(-3);
-          if (trio[2] - trio[0] <= 3) targets = trio;
+        // 1) Choose targets: prefer label + next 3; fallback rightmost 3 numeric clustered
+        let targets = null;
+        let labelIdx = cells.findIndex(c => /TOTAL\s+INVESTMENT\s*:?/i.test(c.textContent || ''));
+        if (labelIdx >= 0 && cells.length >= labelIdx + 4) {
+          const tri = [labelIdx + 1, labelIdx + 2, labelIdx + 3];
+          if (tri.every(i => moneyCell(cells[i]))) targets = tri;
         }
-      }
-
-      // 2) Read amounts from targets, or from previously saved data if parsing fails
-      let amounts = null;
-      if (targets) {
-        const values = targets.map(i => readAmount(cells[i]));
-        if (values.every(v => Number.isFinite(v))) {
-          amounts = values;
-        }
-      }
-      // Rehydrate from saved data if needed
-      if (!amounts && row.__gbbSaved && Array.isArray(row.__gbbSaved.amounts) && row.__gbbSaved.amounts.length === 3) {
-        amounts = row.__gbbSaved.amounts;
-        // If we don’t have targets now, place them after the label, else use last 3 cells
         if (!targets) {
-          if (labelIdx >= 0 && cells.length >= labelIdx + 4) {
-            targets = [labelIdx + 1, labelIdx + 2, labelIdx + 3];
-          } else {
-            const last3 = [cells.length - 3, cells.length - 2, cells.length - 1].filter(i => i >= 0);
-            if (last3.length === 3) targets = last3;
+          const idxs = [];
+          for (let i = 0; i < cells.length; i++) if (moneyCell(cells[i])) idxs.push(i);
+          if (idxs.length >= 3) {
+            const trio = idxs.slice(-3);
+            if (trio[2] - trio[0] <= 3) targets = trio;
           }
         }
+
+        // 2) Read amounts from targets, or from previously saved data if parsing fails
+        let amounts = null;
+        if (targets) {
+          const values = targets.map(i => readAmount(cells[i]));
+          if (values.every(v => Number.isFinite(v))) {
+            amounts = values;
+          }
+        }
+        // Rehydrate from saved data if needed
+        if (!amounts && row.__gbbSaved && Array.isArray(row.__gbbSaved.amounts) && row.__gbbSaved.amounts.length === 3) {
+          amounts = row.__gbbSaved.amounts;
+          // If we don’t have targets now, place them after the label, else use last 3 cells
+          if (!targets) {
+            if (labelIdx >= 0 && cells.length >= labelIdx + 4) {
+              targets = [labelIdx + 1, labelIdx + 2, labelIdx + 3];
+            } else {
+              const last3 = [cells.length - 3, cells.length - 2, cells.length - 1].filter(i => i >= 0);
+              if (last3.length === 3) targets = last3;
+            }
+          }
+        }
+
+        if (!targets || !amounts) return; // ambiguous → do nothing
+
+        // Save for future rehydrate
+        row.__gbbSaved = { targets, amounts };
+
+        // 3) Clean only non-target cells in this TOTAL row
+        const keep = new Set(targets);
+        cells.forEach((c, i) => {
+          if (!keep.has(i)) Array.from(c.querySelectorAll('label.price-choice')).forEach(p => p.remove());
+        });
+
+        // 4) Ensure pills on targets using known amounts (overwrites any wrong pills)
+        wrapCell(cells[targets[0]], amounts[0]);
+        wrapCell(cells[targets[1]], amounts[1]);
+        wrapCell(cells[targets[2]], amounts[2]);
+
+        // 5) Mark authority for guards in other scripts (optional)
+        row.setAttribute('data-gbb-authority', 'asphalt');
+      } finally {
+        row.__gbbApplying = false;
       }
-
-  if (!targets || !amounts) { row.__gbbApplying = false; return; } // ambiguous → do nothing
-
-      // Save for future rehydrate
-      row.__gbbSaved = { targets, amounts };
-
-  // 3) Clean only non-target cells in this TOTAL row
-      const keep = new Set(targets);
-      cells.forEach((c, i) => {
-        if (!keep.has(i)) Array.from(c.querySelectorAll('label.price-choice')).forEach(p => p.remove());
-      });
-
-  // 4) Ensure pills on targets using known amounts (overwrites any wrong pills)
-      wrapCell(cells[targets[0]], amounts[0]);
-      wrapCell(cells[targets[1]], amounts[1]);
-      wrapCell(cells[targets[2]], amounts[2]);
-
-      // 5) Mark authority for guards in other scripts (optional)
-      row.setAttribute('data-gbb-authority', 'asphalt');
-  row.__gbbApplying = false;
     };
 
     for (const t of tables) {

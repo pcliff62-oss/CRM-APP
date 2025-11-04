@@ -384,8 +384,210 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       } catch {}
     }
 
-    // Run the placeholder resolver early so that amounts exist for pill injection
-    replaceKnownPlaceholders(root);
+    function stripPhotoPlaceholders(container: HTMLElement) {
+      try {
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        const removals: Text[] = [];
+        const edits: Array<{ node: Text; text: string }> = [];
+        const tokenRe = /\{[#/]*photos_[^}]*\}/ig;
+        while (walker.nextNode()) {
+          const tn = walker.currentNode as Text;
+          const txt = tn.textContent || '';
+          if (!tokenRe.test(txt)) continue;
+          tokenRe.lastIndex = 0;
+          const cleaned = txt.replace(tokenRe, '').replace(/\{[#/]*gallery_[^}]*\}/ig, '');
+          if (cleaned.trim()) {
+            edits.push({ node: tn, text: cleaned });
+          } else {
+            removals.push(tn);
+          }
+        }
+        for (const { node, text } of edits) node.textContent = text;
+        for (const tn of removals) {
+          const parent = tn.parentNode;
+          parent?.removeChild(tn);
+          if (parent instanceof HTMLElement) {
+            const text = (parent.textContent || '').trim();
+            if (!text && !parent.querySelector('img,table,video')) parent.remove();
+          }
+        }
+      } catch {}
+    }
+
+    function pruneEmptyPlaceholderBlocks(container: HTMLElement) {
+      try {
+        const junk = /^[\s\u00A0_\-–—]*$/;
+        const nodes = Array.from(container.querySelectorAll('p,div,span')) as HTMLElement[];
+        for (const el of nodes) {
+          if (el.querySelector('img,table,video,input,label')) continue;
+          const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!text || junk.test(text)) {
+            el.remove();
+          }
+        }
+      } catch {}
+    }
+
+    // Skylights: restore original layout by unwrapping any injected price-choice labels
+    function restoreSkylightLayout(container: HTMLElement) {
+      try {
+        const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
+        const isSkylights = (t: HTMLElement) => /\bSKYLIGHTS?\b/i.test(t.textContent || '');
+        for (const tbl of tables) {
+          if (!isSkylights(tbl)) continue;
+          // Unwrap any pills that may have been injected in earlier passes
+          const pills = Array.from(tbl.querySelectorAll('label.price-choice')) as HTMLElement[];
+          for (const pill of pills) {
+            // Preserve pill wrappers that contain actual price checkboxes per user requirement
+            const hasCb = !!pill.querySelector('input.proposal-price-checkbox');
+            if (hasCb) continue;
+            const parent = pill.parentNode as Node | null;
+            if (!parent) continue;
+            const frag = document.createDocumentFragment();
+            // Move children out (checkbox + span text) to preserve content without flex styling
+            while (pill.firstChild) frag.appendChild(pill.firstChild);
+            parent.insertBefore(frag, pill);
+            parent.removeChild(pill);
+          }
+          // Remove any pill-specific classes on table cells that could affect spacing
+          const cells = Array.from(tbl.querySelectorAll('td,th')) as HTMLElement[];
+          for (const c of cells) c.classList?.remove('empty-cell');
+        }
+      } catch {}
+    }
+
+    // Skylights: ensure info rows span the full table width (merge cells)
+    function ensureSkylightInfoRowsFullWidth(container: HTMLElement) {
+      try {
+        const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
+        const isSkylights = (t: HTMLElement) => /\bSKYLIGHTS?\b/i.test(t.textContent || '');
+        for (const tbl of tables) {
+          if (!isSkylights(tbl)) continue;
+          const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+          if (!rows.length) continue;
+          // Estimate total columns as max colSpan sum across first 10 rows
+          let totalCols = 0;
+          for (const r of rows.slice(0, 10)) {
+            const cells = Array.from(r.querySelectorAll('td,th')) as HTMLTableCellElement[];
+            const sum = cells.reduce<number>((s: number, c: HTMLTableCellElement) => s + (Number(c.colSpan) || 1), 0);
+            if (sum > totalCols) totalCols = sum;
+          }
+          if (!totalCols) totalCols = 2;
+          const isInfoRow = (t: string) => {
+            const T = t.toUpperCase();
+            return /\bTOTAL\s+SKYLIGHT\s+INVESTMENT\b/.test(T)
+              || /^\s*\*\*\*/.test(t)
+              || /FEDERAL\s+TAX\s+CREDIT/i.test(t)
+              || /ONLY\s+VALID\s+FOR\s+PRIMARY\s+RESIDENCES/i.test(t);
+          };
+          for (const r of rows) {
+            const rText = (r.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!isInfoRow(rText)) continue;
+            const cells = Array.from(r.querySelectorAll('td,th')) as HTMLTableCellElement[];
+            if (!cells.length) continue;
+            const first: HTMLTableCellElement = cells[0];
+            const combined = cells.map(c => c.innerHTML).join(' ');
+            first.innerHTML = combined;
+            try { first.colSpan = totalCols; } catch {}
+            for (let i = 1; i < cells.length; i++) cells[i].remove();
+          }
+        }
+      } catch {}
+    }
+
+    // Skylights: if two skylight tables are side-by-side, consolidate info lines into a single full-width row below them
+    function ensureSkylightInfoAcrossTables(container: HTMLElement) {
+      try {
+        const allRows = Array.from(container.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const pairRows: HTMLTableRowElement[] = [];
+        for (const row of allRows) {
+          const cells = Array.from(row.children).filter(n => n instanceof HTMLElement && (n.tagName === 'TD' || n.tagName === 'TH')) as HTMLElement[];
+          if (!cells.length) continue;
+          const tablesInCells = cells.map(td => td.querySelector('table')).filter(Boolean) as HTMLElement[];
+          const skylightTables = tablesInCells.filter(t => /\bSKYLIGHTS?\b/i.test(t.textContent || ''));
+          if (skylightTables.length >= 2) pairRows.push(row);
+        }
+        for (const row of pairRows) {
+          const wrapperTable = row.closest('table') as HTMLTableElement | null;
+          if (!wrapperTable) continue;
+          // Determine total columns for the wrapper row
+          const cells = Array.from(row.querySelectorAll('td,th')) as HTMLTableCellElement[];
+          let totalCols = cells.reduce((s, c) => s + (Number(c.colSpan) || 1), 0);
+          if (!totalCols) totalCols = cells.length || 2;
+
+          // Look for matching content anywhere within the wrapper table
+          const patterns: RegExp[] = [
+            /\*\*\*\s*All\s+skylights.*removed\s+if\s+desired\*\*\*/i,
+            /\bTOTAL\s+SKYLIGHT\s+INVESTMENT\b/i,
+            /\*\*\*replacing\s+skylights.*(ONLY\s+valid|Only\s+valid).*Primary\s+residences\)?/i,
+            /30%\s+federal\s+tax\s+credit/i
+          ];
+
+          const taken = new Set<HTMLElement>();
+          function findAndHide(table: HTMLTableElement, re: RegExp): HTMLElement | null {
+            const elements = Array.from(table.querySelectorAll('*')) as HTMLElement[];
+            for (const el of elements) {
+              const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+              if (!text) continue;
+              if (!re.test(text)) continue;
+              // Prefer promoting entire row if applicable
+              const tr = el.closest('tr');
+              const choice = (tr as HTMLElement) || el;
+              if ((choice as HTMLElement).dataset?.gbbMoved === 'true') continue;
+              if (taken.has(choice)) continue;
+              (choice as HTMLElement).dataset.gbbMoved = 'true';
+              (choice as HTMLElement).style.display = 'none';
+              const clone = (choice as HTMLElement).cloneNode(true) as HTMLElement;
+              return clone;
+            }
+            return null;
+          }
+
+          const pieces: HTMLElement[] = [];
+          if (!wrapperTable) continue;
+          for (const re of patterns) {
+            const node = findAndHide(wrapperTable, re);
+            if (node) pieces.push(node);
+          }
+          if (!pieces.length) continue;
+
+          // Insert or replace the full-width info row just after the pair row
+          let next = row.nextElementSibling as HTMLTableRowElement | null;
+          let targetRow: HTMLTableRowElement;
+          if (next && next.classList.contains('skylight-info-fullwidth-row')) {
+            targetRow = next;
+            // clear existing content
+            const td = targetRow.querySelector('td,th') as HTMLTableCellElement | null;
+            if (td) td.innerHTML = '';
+          } else {
+            targetRow = document.createElement('tr');
+            targetRow.classList.add('skylight-info-fullwidth-row');
+            const td = document.createElement('td');
+            td.colSpan = totalCols;
+            targetRow.appendChild(td);
+            row.parentElement?.insertBefore(targetRow, row.nextElementSibling);
+          }
+          const cell = targetRow.querySelector('td,th') as HTMLTableCellElement | null;
+          if (!cell) continue;
+          for (const p of pieces) {
+            const wrap = document.createElement('div');
+            wrap.style.margin = '4px 0';
+            // If we promoted a whole row, use its cell content only
+            const inner = p.matches('tr') ? Array.from(p.querySelectorAll('td,th')).map(x => x.innerHTML).join(' ') : p.innerHTML;
+            wrap.innerHTML = inner;
+            cell.appendChild(wrap);
+          }
+        }
+      } catch {}
+    }
+
+    // Run placeholder cleanup early so that amounts exist for pill injection
+  replaceKnownPlaceholders(root);
+  stripPhotoPlaceholders(root);
+  pruneEmptyPlaceholderBlocks(root);
+  restoreSkylightLayout(root);
+  ensureSkylightInfoRowsFullWidth(root);
+  ensureSkylightInfoAcrossTables(root);
 
     // Utility: parse money amount from string like "$ 3,600.00"
     function parseMoney(text: string): number {
@@ -405,6 +607,13 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       const t = (row?.textContent || '').toUpperCase();
       if (t.includes('TOTAL') && t.includes('INVESTMENT')) return true;
       return false;
+    }
+    // Utility: determine if an element is inside the Skylights section table
+    function isSkylightContext(el: HTMLElement | null): boolean {
+      if (!el) return false;
+      const table = el.closest('table') as HTMLElement | null;
+      const txt = (table ? table.textContent : el.textContent) || '';
+      return /SKYLIGHTS?/i.test(txt);
     }
     // Utility: determine if an element is inside the Ice & Water descriptive area
     function isIceWaterContext(el: HTMLElement | null): boolean {
@@ -623,9 +832,10 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         const host = tn.parentElement as HTMLElement | null;
         if (!host) continue;
   // Skip if already wrapped
-        if (host.closest('.price-choice')) continue;
+    if (host.closest('.price-choice')) continue;
         if (isInWndOrTotal(host)) continue;
-    if (isIceWaterContext(host)) continue;
+  if (isIceWaterContext(host)) continue;
+  if (isSkylightContext(host)) continue;
   // Skip any price within the Carpentry clause
   if (isInCarpentry(host)) continue;
         // Capture first $ occurrence in this text node
@@ -667,11 +877,12 @@ export default function ProposalView({ params }: { params: { id: string } }) {
 
     // Cross-tag pass: within typical cells/tags, replace sequences like "$<tag>3,600</tag>.00" with a pill
     function applyCrossTagPriceWrappers(container: HTMLElement) {
-      const candidates = Array.from(container.querySelectorAll('td,th,p,span,b,strong')) as HTMLElement[];
+    const candidates = Array.from(container.querySelectorAll('td,th,p,span,b,strong')) as HTMLElement[];
       for (const el of candidates) {
         if (el.closest('.price-choice')) continue;
   if (isInWndOrTotal(el)) continue;
   if (isIceWaterContext(el)) continue;
+  if (isSkylightContext(el)) continue;
   if (isInCarpentry(el)) continue;
         const html0 = el.innerHTML;
         // Skip if already has any checkbox
@@ -742,7 +953,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           plywood:   pricing?.plywood?.selected ?? null,
           chimney:   pricing?.chimney?.selected ?? null,
           skylights: pricing?.skylights?.selected ?? null,
-          trim:      pricing?.trim?.selected ?? null,
+          trim:      pricing?.trim?.selected ?? (pricing?.trim ? true : null),
           gutters:   pricing?.gutters?.selected ?? null,
           detached:  pricing?.detached?.selected ?? null,
           windows:   pricing?.windowsAndDoors?.selected ?? null,
@@ -815,6 +1026,11 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             show = workSel.decking ? true : (workSel.decking === false ? false : null);
           } else if (key.startsWith('extras:')) {
             const sub = key.split(':')[1];
+            if (sub === 'trim') {
+              // Keep Trim visible so individual line items remain selectable even when other extras toggle
+              (tbl as HTMLElement).style.removeProperty?.('display');
+              continue;
+            }
             const flag = extrasSel[sub as keyof typeof extrasSel];
             // Strict per-section gating for all extras (no special cases)
             show = (flag === true) ? true : (flag === false ? false : null);
@@ -1464,6 +1680,39 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           }
         } catch {}
       })();
+
+      const pruneTrimPlaceholders = () => {
+        try {
+          const scope = sectionHost as HTMLElement;
+          const placeholderRe = /\{[#/]*trim[^}]*\}/ig;
+          const nodes = Array.from(scope.querySelectorAll('td,th,p,span,li')) as HTMLElement[];
+          for (const el of nodes) {
+            if (el.closest('[data-trim-total="1"]')) continue;
+            if (el.querySelector('label.price-choice,input.proposal-price-checkbox')) continue;
+            let text = el.textContent || '';
+            const cleaned = text.replace(placeholderRe, '').replace(/[\_\u00A0]{2,}/g, ' ').trim();
+            if (!cleaned) {
+              el.remove();
+              continue;
+            }
+            if (cleaned !== text.trim()) {
+              el.textContent = cleaned;
+            }
+          }
+          const rows = Array.from(scope.querySelectorAll('tr')) as HTMLTableRowElement[];
+          for (const row of rows) {
+            if (row.querySelector('[data-trim-total="1"]')) continue;
+            const cells = Array.from(row.querySelectorAll('td,th')) as HTMLElement[];
+            if (!cells.length) continue;
+            const hasContent = cells.some(c => {
+              const t = (c.textContent || '').replace(/\s+/g, ' ').trim();
+              return !!t;
+            });
+            if (!hasContent) row.remove();
+          }
+        } catch {}
+      };
+      pruneTrimPlaceholders();
 
       // Subtotal from any Trim checkboxes (if present)
       const recalcTrim = () => {
@@ -2237,9 +2486,45 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       }
     }
 
-    // Synthetic Siding: handled by setupSectionTotals() with inline-after-label placement; no-op here to avoid double injection
+    // Synthetic siding and other siding sections: ensure TOTAL row renders a pill+checkbox
     (function setupSidingTotal(){
-      return;
+      try {
+        const tables = Array.from(root.querySelectorAll('table[data-section^="siding:"]')) as HTMLElement[];
+        if (!tables.length) return;
+        const totalRe = /TOTAL\s+(?:SIDING\s+)?INVESTMENT\s*:/i;
+        for (const tbl of tables) {
+          const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+          if (!rows.length) continue;
+          const totalRow = rows.find(r => totalRe.test(r.textContent || '')) || null;
+          if (!totalRow) continue;
+          const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+          if (!cells.length) continue;
+          let amountCell: HTMLElement | null = null;
+          for (const cell of cells.slice().reverse()) {
+            if (/\$\s*[0-9]/.test(cell.textContent || '')) { amountCell = cell; break; }
+          }
+          if (!amountCell) {
+            amountCell = cells[cells.length - 1];
+          }
+          if (!amountCell) continue;
+          const amt = parseMoney(amountCell.textContent || '');
+          if (!(amt > 0)) continue;
+          try { amountCell.setAttribute('data-siding-total', '1'); } catch {}
+          Array.from(amountCell.querySelectorAll('label.price-choice,input.proposal-price-checkbox')).forEach(el => (el as HTMLElement).remove());
+          const label = document.createElement('label');
+          label.className = 'price-choice';
+          const span = document.createElement('span');
+          span.textContent = fmt(amt);
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.className = 'proposal-price-checkbox';
+          input.setAttribute('data-amount', String(amt));
+          label.appendChild(span);
+          label.appendChild(input);
+          amountCell.innerHTML = '';
+          amountCell.appendChild(label);
+        }
+      } catch {}
     })();
 
   // Find all elements containing section total labels and keep only the leaf-most elements
