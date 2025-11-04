@@ -38,7 +38,7 @@ export default async function LeadsPage() {
   return (
     <div className="space-y-4 relative">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Leads</h1>
+        <h1 className="text-2xl font-semibold">Pipeline</h1>
         <NewLeadButton />
       </div>
   {/* Global pipeline scroller to adjust a selected lead's stage */}

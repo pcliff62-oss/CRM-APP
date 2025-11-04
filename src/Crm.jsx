@@ -688,7 +688,7 @@ function Leads({ customers, onNameClick, onAddLead, onStatusChange, darkMode }) 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Leads</h1>
+  <h1 className="text-2xl font-semibold">Pipeline</h1>
         <button
           className="border rounded px-3 py-2 text-lg bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-2"
           onClick={onAddLead}
@@ -701,6 +701,52 @@ function Leads({ customers, onNameClick, onAddLead, onStatusChange, darkMode }) 
       <Card title="Lead Customers" darkMode={darkMode}>
         <CustomerTable customers={leads} onNameClick={onNameClick} onStatusChange={onStatusChange} darkMode={darkMode} />
       </Card>
+    </div>
+  );
+}
+
+/* ---- Archive (by Year) ---- */
+function Archive({ customers, darkMode }) {
+  // Group by year based on soldDate when status indicates done
+  const archived = customers.filter(c => ["Complete", "Invoiced"].includes(c.status));
+  const byYear = archived.reduce((map, c) => {
+    const yr = (c.soldDate ? new Date(c.soldDate) : new Date()).getFullYear();
+    map[yr] = map[yr] || [];
+    map[yr].push(c);
+    return map;
+  }, {});
+  const years = Object.keys(byYear).map(n => Number(n)).sort((a,b)=>b-a);
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold">Archive</h1>
+      {years.length === 0 ? (
+        <div className="text-sm text-gray-500">No archived items yet.</div>
+      ) : (
+        years.map(yr => (
+          <Card key={yr} title={`Year ${yr}`} darkMode={darkMode}>
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className={darkMode ? "text-left text-gray-300" : "text-left text-gray-600"}>
+                  <th className="py-2 pr-4">Name</th>
+                  <th className="py-2 pr-4">Address</th>
+                  <th className="py-2 pr-4">Sold Date</th>
+                  <th className="py-2 pr-4">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {byYear[yr].map((c) => (
+                  <tr key={c.id} className={darkMode ? "border-t bg-black text-white" : "border-t bg-white text-black"}>
+                    <td className="py-2 pr-4">{c.first} {c.last}</td>
+                    <td className="py-2 pr-4">{c.address}, {c.town} {c.zip}</td>
+                    <td className="py-2 pr-4">{c.soldDate || ""}</td>
+                    <td className="py-2 pr-4">{c.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        ))
+      )}
     </div>
   );
 }
@@ -1362,10 +1408,11 @@ export default function Crm() {
             <SidebarButton active={tab === "dashboard"} onClick={() => setTab("dashboard")} darkMode={darkMode}>Dashboard</SidebarButton>
             <SidebarButton active={tab === "calendar"} onClick={() => setTab("calendar")} darkMode={darkMode}>Calendar</SidebarButton>
             <SidebarButton active={tab === "customers"} onClick={() => setTab("customers")} darkMode={darkMode}>Customers</SidebarButton>
-            <SidebarButton active={tab === "leads"} onClick={() => setTab("leads")} darkMode={darkMode}>Leads</SidebarButton>
+            <SidebarButton active={tab === "leads"} onClick={() => setTab("leads")} darkMode={darkMode}>Pipeline</SidebarButton>
             <SidebarButton active={tab === "prospects"} onClick={() => setTab("prospects")} darkMode={darkMode}>Prospects</SidebarButton>
             <SidebarButton active={tab === "jobs"} onClick={() => setTab("jobs")} darkMode={darkMode}>Jobs</SidebarButton>
             <SidebarButton active={tab === "communication"} onClick={() => setTab("communication")} darkMode={darkMode}>Communication</SidebarButton>
+            <SidebarButton active={tab === "archive"} onClick={() => setTab("archive")} darkMode={darkMode}>Archive</SidebarButton>
           </nav>
         </aside>
 
@@ -1483,6 +1530,9 @@ export default function Crm() {
               />
             )}
             {tab === "communication" && <Communication darkMode={darkMode} />}
+            {tab === "archive" && (
+              <Archive customers={customers} darkMode={darkMode} />
+            )}
             <CustomerProfile
               customer={activeCustomer}
               onClose={() => setActiveCustomer(null)}

@@ -1,4 +1,4 @@
-export default function MobileShell({ title = 'HyTech CRM', onPlus, children, tab, onTabChange, frame = 'edge' }) {
+export default function MobileShell({ title = 'HyTech CRM', onPlus, onBack, showPlus = true, children, tab, onTabChange, frame = 'edge' }) {
   const container =
     frame === 'device'
       ? 'mx-auto h-screen max-w-[393px] bg-neutral-50 text-neutral-900 flex flex-col overflow-hidden rounded-2xl shadow-lg'
@@ -9,22 +9,34 @@ export default function MobileShell({ title = 'HyTech CRM', onPlus, children, ta
       {/* Sticky header */}
       <div className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-neutral-200" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <div className="flex items-center justify-between px-4 py-3">
-          <div className="text-sm text-neutral-500">{new Date().toLocaleDateString()}</div>
+          <div className="flex items-center gap-2 min-w-[96px]">
+            {onBack ? (
+              <button aria-label="Back" className="rounded-lg border border-neutral-200 px-2 py-1 text-sm" onClick={onBack}>←</button>
+            ) : (
+              <div className="text-sm text-neutral-500">{new Date().toLocaleDateString()}</div>
+            )}
+          </div>
           <div className="font-semibold">{title}</div>
-          <button
-            className="rounded-xl bg-neutral-900 text-white text-sm px-3 py-1"
-            onClick={onPlus}
-          >
-            +
-          </button>
+          <div className="min-w-[96px] flex justify-end">
+            {showPlus && (
+              <button
+                className="rounded-xl bg-neutral-900 text-white text-sm px-3 py-1"
+                onClick={onPlus}
+              >
+                +
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Scroll area */}
       <div className="flex-1 overflow-y-auto">{children}</div>
 
-      {/* Bottom nav */}
-      <BottomNav value={tab} onChange={onTabChange} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }} />
+      {/* Bottom nav (sticky) */}
+      <div className="sticky bottom-0 z-10">
+        <BottomNav value={tab} onChange={onTabChange} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }} />
+      </div>
     </div>
   )
 }
@@ -43,6 +55,8 @@ function BottomNav({ value, onChange, style }) {
     <div className="border-t border-neutral-200 bg-white" style={style}>
       <div className="mx-auto max-w-[393px] flex">
         <Item id="dashboard" label="Dashboard" icon="🏠" />
+        <Item id="calendar" label="Calendar" icon="🗓️" />
+        <Item id="leads" label="My Leads" icon="📇" />
         <Item id="customers" label="Customers" icon="👤" />
         <Item id="settings" label="Settings" icon="⚙️" />
       </div>

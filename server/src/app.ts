@@ -71,9 +71,11 @@ app.post('/api/storage/delete', async (req, res) => {
 // Customers API (stored as JSON in GCS with optimistic concurrency)
 import { listCustomers, getCustomer, upsertCustomer, deleteCustomer, createCustomer } from './customers'
 
-app.get('/api/customers', async (_req, res) => {
-  const items = await listCustomers().catch(e => ({ error: String(e) }))
+app.get('/api/customers', async (req, res) => {
+  const assignedTo = typeof req.query.assignedTo === 'string' ? req.query.assignedTo : undefined
+  let items = await listCustomers().catch(e => ({ error: String(e) }))
   if ((items as any).error) return res.status(500).json({ ok:false, error:(items as any).error })
+  if (assignedTo) items = (items as any[]).filter(it => (String((it as any).assignedTo||'').toLowerCase() === assignedTo!.toLowerCase()))
   res.json({ ok:true, items })
 })
 
@@ -133,5 +135,28 @@ app.post('/api/tasks', express.json(), async (req, res) => {
 
 app.delete('/api/tasks/:id', async (req, res) => {
   await deleteTask(req.params.id).catch(e => res.status(400).json({ ok:false, error:String(e) }))
+  res.json({ ok:true })
+})
+
+// Appointments API
+import { listAppointments, upsertAppointment, deleteAppointment } from './appointments'
+
+app.get('/api/appointments', async (req, res) => {
+  const assignedTo = typeof req.query.assignedTo === 'string' ? req.query.assignedTo : undefined
+  const date = typeof req.query.date === 'string' ? req.query.date : undefined
+  const items = await listAppointments({ assignedTo, date }).catch(e => ({ error: String(e) }))
+  if ((items as any).error) return res.status(500).json({ ok:false, error:(items as any).error })
+  res.json({ ok:true, items })
+})
+
+app.post('/api/appointments', express.json(), async (req, res) => {
+  const body = req.body || {}
+  const saved = await upsertAppointment(body).catch(e => ({ error: String(e) }))
+  if ((saved as any).error) return res.status(400).json({ ok:false, error:(saved as any).error })
+  res.json({ ok:true, item: saved })
+})
+
+app.delete('/api/appointments/:id', async (req, res) => {
+  await deleteAppointment(req.params.id).catch(e => res.status(400).json({ ok:false, error:String(e) }))
   res.json({ ok:true })
 })

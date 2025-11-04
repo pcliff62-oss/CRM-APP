@@ -1,8 +1,8 @@
 import { z } from 'zod'
-import { storage } from './gcs'
+import { bucket } from './gcs'
 import { GCS_BUCKET } from './env'
 
-const BUCKET = storage.bucket(GCS_BUCKET)
+const BUCKET: any = bucket
 const KEY = 'app/tasks.json'
 
 export const Task = z.object({

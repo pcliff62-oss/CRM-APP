@@ -1,4 +1,6 @@
 import prisma from '@/lib/db';
+import { scheduleJobForLead } from '@/lib/jobs';
+export const dynamic = 'force-dynamic';
 import { NextRequest } from 'next/server';
 import { revalidatePath } from 'next/cache';
 
@@ -20,6 +22,10 @@ export async function POST(req: NextRequest) {
     if (lead.stage !== stage) {
       lead = await prisma.lead.update({ where: { id: lead.id }, data: { stage } });
     }
+  }
+
+  if (lead.stage === 'APPROVED') {
+    try { await scheduleJobForLead(lead.id); } catch {}
   }
 
   // Revalidate relevant paths

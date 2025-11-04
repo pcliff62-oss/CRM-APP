@@ -62,6 +62,18 @@ export default async function CustomerDetail({ params }: { params: { id: string 
               <CardTitle>{contact.name}</CardTitle>
               <ManageContactClient inline contact={{ id: contact.id, name: contact.name, email: contact.email || '', phone: contact.phone || '' }} property={lead?.property ? { id: lead.property.id, address1: lead.property.address1 } : null} />
             </div>
+            {typeof lead?.contractPrice === 'number' && isFinite(lead.contractPrice) && (
+              <div className="w-full">
+                <div className="inline-flex items-center gap-2 rounded-md bg-emerald-50 border border-emerald-200 px-2 py-1 text-emerald-800">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                    <path d="M22 4 12 14.01l-3-3" />
+                  </svg>
+                  <span className="font-semibold">Approved contract price:</span>
+                  <span className="tabular-nums">${lead.contractPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+            )}
           </div>
         </CardHeader>
         <CardContent className="grid md:grid-cols-2 gap-4 text-sm">
@@ -69,9 +81,7 @@ export default async function CustomerDetail({ params }: { params: { id: string 
             <div>Email: {contact.email ? <a href={`mailto:${contact.email}`} className="text-blue-600 hover:underline">{contact.email}</a> : "—"}</div>
             <div>Phone: {contact.phone ? <a href={`tel:${normalizeTel(contact.phone)}`} className="text-blue-600 hover:underline">{formatPhone(contact.phone)}</a> : "—"}</div>
             <div>Address: {lead?.property?.address1 ?? "—"}</div>
-            {lead?.contractPrice ? (
-              <div>Contract Price: ${lead.contractPrice.toLocaleString()}</div>
-            ) : null}
+            {/* Approved price is shown in the header banner */}
             <div className="mt-4">
               {(() => {
                 const p = lead?.property;

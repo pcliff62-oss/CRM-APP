@@ -54,6 +54,58 @@ export default function CalendarPage() {
     if (ev) setSelected(ev);
   }, [events]);
 
+  // Drag & drop: persist new start/end
+  const onEventDrop = useCallback(async (dropInfo: any) => {
+    try {
+      const ev = dropInfo.event as any;
+      // Fallback: if no end provided by calendar, assume 1h duration
+      const start: Date | null = ev.start;
+      const end: Date | null = ev.end || (start ? new Date(start.getTime() + 60 * 60 * 1000) : null);
+      if (!start || !end) { dropInfo.revert(); return; }
+      const payload = {
+        id: ev.id,
+        title: ev.title,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        allDay: !!ev.allDay,
+        description: ev.extendedProps?.description ?? null,
+        leadId: ev.extendedProps?.leadId ?? null,
+        userId: ev.extendedProps?.userId ?? null,
+      };
+      const res = await fetch('/api/appointments', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) { dropInfo.revert(); return; }
+      // Optimistic local update
+      setEvents(prev => prev.map(e => e.id === payload.id ? { ...e, start: payload.start, end: payload.end, allDay: payload.allDay } as any : e));
+    } catch {
+      dropInfo.revert();
+    }
+  }, []);
+
+  // Resize: persist new end
+  const onEventResize = useCallback(async (resizeInfo: any) => {
+    try {
+      const ev = resizeInfo.event as any;
+      const start: Date | null = ev.start;
+      const end: Date | null = ev.end;
+      if (!start || !end) { resizeInfo.revert(); return; }
+      const payload = {
+        id: ev.id,
+        title: ev.title,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        allDay: !!ev.allDay,
+        description: ev.extendedProps?.description ?? null,
+        leadId: ev.extendedProps?.leadId ?? null,
+        userId: ev.extendedProps?.userId ?? null,
+      };
+      const res = await fetch('/api/appointments', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) { resizeInfo.revert(); return; }
+      setEvents(prev => prev.map(e => e.id === payload.id ? { ...e, start: payload.start, end: payload.end, allDay: payload.allDay } as any : e));
+    } catch {
+      resizeInfo.revert();
+    }
+  }, []);
+
   const onClose = useCallback(() => setSelected(null), []);
   const onSaved = useCallback(() => { setSelected(null); load(); }, [load]);
 
@@ -70,11 +122,19 @@ export default function CalendarPage() {
             selectable
             select={onDateSelect}
             eventClick={onEventClick}
+            editable
+            eventStartEditable
+            eventDurationEditable
+            eventDrop={onEventDrop}
+            eventResize={onEventResize}
             events={events as any}
             height="75vh"
             headerToolbar={{ left: "prev,next today", center: "title", right: "dayGridMonth,timeGridWeek,timeGridDay" }}
+            allDaySlot
+            allDayText="Jobs"
             slotMinTime="07:00:00"
             slotMaxTime="18:00:00"
+            slotDuration="00:30:00"
             slotLabelFormat={{ hour: 'numeric', minute: '2-digit', hour12: true }}
             eventTimeFormat={{ hour: 'numeric', minute: '2-digit', meridiem: true, hour12: true }}
             dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}

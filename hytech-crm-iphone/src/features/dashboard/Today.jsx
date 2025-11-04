@@ -1,9 +1,113 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { todayLocal } from '../../lib/api.js'
 
-export default function Today() {
+function MiniMonth({ appts = [], onOpen, onSelectDay }) {
+  const today = new Date()
+  const year = today.getFullYear()
+  const month = today.getMonth()
+  const first = new Date(year, month, 1)
+  const startDay = first.getDay() // 0-6
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  // Build per-day markers: dots for appointments and jobs
+  const byDay = new Map()
+  for (const a of appts) {
+    const iso = (a.when||'').slice(0,10)
+    if (!iso) continue
+    if (!byDay.has(iso)) byDay.set(iso, { hasAppt:false, hasJob:false })
+    const entry = byDay.get(iso)
+    if (a.job || a.type === 'install') entry.hasJob = true
+    else entry.hasAppt = true
+  }
+  const rows = []
+  let cells = []
+  for (let i = 0; i < startDay; i++) cells.push(null)
+  for (let d = 1; d <= daysInMonth; d++) {
+    const iso = new Date(year, month, d).toISOString().slice(0,10)
+    const marks = byDay.get(iso) || { hasAppt:false, hasJob:false }
+    cells.push({ d, iso, ...marks })
+  }
+  while (cells.length) rows.push(cells.splice(0,7))
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-neutral-200">
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="font-medium">{today.toLocaleString([], { month: 'long', year: 'numeric' })}</div>
+        <button className="text-xs text-blue-600" onClick={onOpen}>Open Calendar</button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 px-3 pb-3 text-xs select-none">
+        {['S','M','T','W','T','F','S'].map(l => <div key={l} className="text-neutral-400 text-center py-1">{l}</div>)}
+        {rows.flat().map((c, i) => (
+          <button
+            key={i}
+            className={`h-10 text-center rounded bg-neutral-50 active:bg-neutral-100 ${c? '':'opacity-0'}`}
+            disabled={!c}
+            onClick={()=> c && onSelectDay?.(c.iso)}
+          >
+            {c && (
+              <div className="h-10 flex flex-col items-center justify-center gap-0.5">
+                <div className="leading-none">{c.d}</div>
+                <div className="flex gap-1">
+                  {c.hasAppt && <span className="inline-block w-1.5 h-1.5 rounded-full bg-neutral-700" />}
+                  {c.hasJob && <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />}
+                </div>
+              </div>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ContactsQuickSearch({ onOpen }) {
+  const [q, setQ] = useState('')
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-neutral-200">
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="font-medium">Contacts</div>
+        <button className="text-xs text-blue-600" onClick={onOpen}>Open Contacts</button>
+      </div>
+      <div className="px-4 pb-4">
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search contacts..." className="w-full border rounded-lg px-3 py-2 text-sm" />
+      </div>
+    </div>
+  )
+}
+
+export default function Today({ appts = [], customers = [], onOpenCalendar, onOpenCustomers, onSelectCustomer }) {
   const [open, setOpen] = useState({ install: true, appts: true, emails: true })
+  const [selectedDay, setSelectedDay] = useState('')
+  const today = todayLocal()
+  const todays = useMemo(() => appts.filter(a => (a.when||'').slice(0,10) === today), [appts, today])
+  const upcomingInstalls = useMemo(() => {
+    return appts
+      .filter(a => a.type === 'install' || a.job)
+      .sort((a,b)=> new Date(a.when) - new Date(b.when))
+      .slice(0, 5)
+  }, [appts])
+  const dayItems = useMemo(() => appts.filter(a => (a.when||'').slice(0,10) === selectedDay), [appts, selectedDay])
   return (
     <div className="space-y-3">
+      {/* Move today’s appointments to the top */}
+      <Tile
+        title="Today’s Appointments"
+        open={open.appts}
+        onToggle={() => setOpen(s => ({ ...s, appts: !s.appts }))}
+      >
+        {todays.length ? (
+          <ul className="text-sm text-neutral-700 list-disc pl-5">
+            {todays.map(a => (
+              <li key={a.id}>{new Date(a.when).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})} — {a.title}</li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-sm text-neutral-700">No appointments today.</div>
+        )}
+      </Tile>
+
+      <MiniMonth appts={appts} onOpen={onOpenCalendar} onSelectDay={setSelectedDay} />
+
+  <ContactsQuickSearch onOpen={onOpenCustomers} />
+
       <WeatherPill />
 
       <Tile
@@ -11,19 +115,19 @@ export default function Today() {
         open={open.install}
         onToggle={() => setOpen(s => ({ ...s, install: !s.install }))}
       >
-        <div className="text-sm text-neutral-700">No installs scheduled.</div>
+        {upcomingInstalls.length ? (
+          <ul className="text-sm text-neutral-700 space-y-1">
+            {upcomingInstalls.map(a => (
+              <li key={a.id} className="flex items-center gap-2">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                <span>{new Date(a.when).toLocaleString([], { dateStyle:'medium', timeStyle:'short' })} — {a.title}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (<div className="text-sm text-neutral-700">No installs scheduled.</div>)}
       </Tile>
 
-      <Tile
-        title="Today’s Appointments"
-        open={open.appts}
-        onToggle={() => setOpen(s => ({ ...s, appts: !s.appts }))}
-      >
-        <ul className="text-sm text-neutral-700 list-disc pl-5">
-          <li>10:30a — Site visit: Carlton</li>
-          <li>2:00p — Material drop check</li>
-        </ul>
-      </Tile>
+      
 
       <Tile
         title="New Emails"
@@ -35,6 +139,38 @@ export default function Today() {
 
       <SalesCard />
       <TasksPreview />
+
+      {/* Day overview drawer */}
+      {selectedDay && (
+        <div className="fixed inset-x-0 bottom-0 z-10">
+          <div className="mx-auto max-w-sm p-3">
+            <div className="rounded-2xl border border-neutral-200 bg-white shadow-lg">
+              <div className="flex items-center justify-between px-4 py-3">
+                <div className="font-medium">{new Date(selectedDay).toLocaleDateString([], { dateStyle:'medium' })}</div>
+                <button className="text-neutral-400" onClick={()=>setSelectedDay('')}>✕</button>
+              </div>
+              <div className="px-4 pb-4 text-sm">
+                {dayItems.length ? (
+                  <ul className="space-y-2">
+                    {dayItems.map(a => (
+                      <li key={a.id} className="flex items-start gap-2">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full mt-1 ${a.job? 'bg-emerald-500':'bg-neutral-700'}`} />
+                        <div>
+                          <div className="font-medium">{a.job? 'Job':'Lead'} • {a.workType || a.title}</div>
+                          <div className="text-neutral-600">{a.customerName || ''}{a.address? ` — ${a.address}`:''}</div>
+                          <div className="text-neutral-500">{new Date(a.when).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}</div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-neutral-600">No items scheduled.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

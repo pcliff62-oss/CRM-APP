@@ -19,7 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="p-5 text-xl font-semibold">HyTech CRM</div>
             <nav className="px-3 space-y-1">
               <NavLink href="/">Dashboard</NavLink>
-              <NavLink href="/leads">Leads</NavLink>
+              <NavLink href="/leads">Pipeline</NavLink>
               <NavLink href="/measure">Measurements</NavLink>
               <NavLink href="/proposals">Proposals</NavLink>
               <NavLink href="/calendar">Calendar</NavLink>

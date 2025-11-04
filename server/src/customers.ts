@@ -1,8 +1,8 @@
 import { z } from 'zod'
-import { storage } from './gcs'
+import { bucket } from './gcs'
 import { GCS_BUCKET } from './env'
 
-const BUCKET = storage.bucket(GCS_BUCKET)
+const BUCKET: any = bucket
 const KEY = 'app/customers.json'
 
 export const Customer = z.object({
@@ -13,6 +13,7 @@ export const Customer = z.object({
   phone: z.string().optional().default(''),
   email: z.string().optional().default(''),
   address: z.string().optional().default(''),
+  assignedTo: z.string().optional().default(''),
   notes: z.string().optional().default(''),
   createdAt: z.number().default(() => Date.now()),
   updatedAt: z.number().default(() => Date.now()),
@@ -32,13 +33,14 @@ async function readStore(): Promise<{ data: Store; gen?: string }> {
     const raw = JSON.parse(buf.toString('utf8')) as Store
     // Backwards-compat: ensure town/status keys exist on all items.
     // If legacy records used `city`, promote it to `town` when `town` is empty.
-    const items = Array.isArray(raw.items) ? raw.items.map((it: any) => {
+  const items = Array.isArray(raw.items) ? raw.items.map((it: any) => {
       const legacyCity = norm((it as any)?.city)
       const townVal = norm((it as any)?.town) || legacyCity
       return {
         ...it,
         town: townVal,
         status: norm((it as any)?.status),
+    assignedTo: norm((it as any)?.assignedTo),
       }
     }) : []
     return { data: { items } as Store, gen: meta?.generation }
@@ -78,6 +80,7 @@ export async function upsertCustomer(partial: Partial<CustomerT> & { id?: string
   // Accept legacy `city` as a source for town if provided
   if ('town' in partial || 'city' in (partial as any)) (patch as any).town = norm((partial as any).town || (partial as any).city)
   if ('status' in partial) (patch as any).status = norm((partial as any).status)
+  if ('assignedTo' in partial) (patch as any).assignedTo = norm((partial as any).assignedTo)
   if (idx >= 0) {
     const merged = Customer.parse({ ...data.items[idx], ...patch, id, updatedAt: now })
     data.items[idx] = merged
@@ -86,6 +89,7 @@ export async function upsertCustomer(partial: Partial<CustomerT> & { id?: string
       ...patch,
       town: norm((patch as any).town),
       status: norm((patch as any).status),
+  assignedTo: norm((patch as any).assignedTo),
       id,
       createdAt: now,
       updatedAt: now,

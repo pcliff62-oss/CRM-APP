@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "workspaces": [
-    "hytech-crm-iphone"
+    "hytech-crm-iphone",
+    "server"
   ],
   "scripts": {
     "dev": "next dev",
@@ -15,7 +16,8 @@
     "prisma:studio": "prisma studio",
     "field:dev": "npm --workspace hytech-crm-iphone run dev",
     "field:build": "npm --workspace hytech-crm-iphone run build",
-    "field:preview": "npm --workspace hytech-crm-iphone run preview"
+    "field:preview": "npm --workspace hytech-crm-iphone run preview",
+    "server:dev": "npm --workspace server run dev"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.654.0",
@@ -35,10 +37,11 @@
     "jose": "^5.9.6",
     "maplibre-gl": "3.6.2",
     "next": "^14.2.32",
+    "nodemailer": "6.9.15",
     "pdf-lib": "^1.17.1",
+    "playwright": "1.48.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "playwright": "1.48.2",
     "sharp": "^0.33.4",
     "tailwind-merge": "2.5.2",
     "zod": "3.23.8"
@@ -46,6 +49,7 @@
   "devDependencies": {
     "@types/mapbox__mapbox-gl-draw": "1.4.7",
     "@types/node": "20.11.30",
+    "@types/nodemailer": "^7.0.3",
     "@types/react": "18.2.45",
     "@types/react-dom": "18.2.18",
     "autoprefixer": "10.4.19",

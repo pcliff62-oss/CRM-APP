@@ -4826,6 +4826,9 @@ Object.assign(data, {
 // ---------- UI primitives
 function Header({ company, grandTotal, onPrint, auth, onLogout }) {
   const [creating, setCreating] = useState(false);
+  const [showSend, setShowSend] = useState(false);
+  const [emails, setEmails] = useState("");
+  const [sending, setSending] = useState(false);
   return (
     <header className="bg-white border-b">
       <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -4863,15 +4866,29 @@ function Header({ company, grandTotal, onPrint, auth, onLogout }) {
                 if (!res.ok) throw new Error(await res.text());
                 const data = await res.json();
                 try { await (navigator.clipboard && navigator.clipboard.writeText(data.signUrl)); } catch {}
-                alert(`E-link created.\n\n${data.signUrl}\n\n(The link was copied to your clipboard.)`);
+                alert(`Smart Doc ready.\n\n${data.signUrl}\n\n(The link was copied to your clipboard.)`);
               } catch (e) {
-                alert('Failed to create e-link');
+                alert('Failed to create Smart Doc');
               } finally {
                 setCreating(false);
               }
             }}
           >
-            {creating ? 'Creating…' : 'Get e-link'}
+            {creating ? 'Creating…' : 'View Smart Doc'}
+          </button>
+          <button
+            className="px-3 py-1 rounded bg-slate-700 text-white text-sm"
+            onClick={() => {
+              // Pre-fill emails from snapshot if available
+              try {
+                const snap = (typeof window !== 'undefined' && window.__hytech_snapshot) ? window.__hytech_snapshot() : null;
+                const e = snap?.customer?.email || '';
+                setEmails(e || '');
+              } catch {}
+              setShowSend(true);
+            }}
+          >
+            Send to Customer
           </button>
           {auth && auth.loggedIn ? (
             <div className="flex items-center gap-3">
@@ -4883,6 +4900,57 @@ function Header({ company, grandTotal, onPrint, auth, onLogout }) {
           ) : null}
         </div>
       </div>
+      {showSend && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-xl shadow-xl p-5 w-[420px] max-w-[94vw]">
+            <div className="text-lg font-semibold mb-2">Send Proposal</div>
+            <div className="text-sm text-slate-600 mb-3">Enter one or more email addresses separated by commas.</div>
+            <input
+              type="text"
+              value={emails}
+              onChange={(e)=>setEmails(e.target.value)}
+              className="w-full border rounded px-3 py-2 mb-3"
+              placeholder="name@example.com, other@example.com"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button className="px-3 py-1 rounded border" onClick={()=>setShowSend(false)}>Cancel</button>
+              <button
+                className="px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
+                disabled={sending}
+                onClick={async ()=>{
+                  if (!emails.trim()) { alert('Enter at least one email'); return; }
+                  setSending(true);
+                  try {
+                    const snapFn = (typeof window !== 'undefined' && window.__hytech_snapshot) ? window.__hytech_snapshot : null;
+                    let snapshot = snapFn ? snapFn() : null;
+                    if (!snapshot) {
+                      for (let i = 0; i < 5 && !snapshot; i++) { await new Promise(r=>setTimeout(r,100)); snapshot = (typeof window !== 'undefined' && window.__hytech_snapshot) ? window.__hytech_snapshot() : null; }
+                    }
+                    if (!snapshot) { alert('Unable to capture proposal snapshot'); setSending(false); return; }
+                    const res = await fetch('/api/proposals/create', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ snapshot, leadId: snapshot.leadId || null, templateName: 'HyTechProposalTemplate.docx' })
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    const data = await res.json();
+                    const sendRes = await fetch('/api/proposals/send-to-customer', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ signUrl: data.signUrl, emails, leadId: snapshot.leadId || null })
+                    });
+                    if (!sendRes.ok) throw new Error(await sendRes.text());
+                    alert('Sent! Customer moved to Prospects.');
+                    setShowSend(false);
+                  } catch (e) {
+                    alert('Failed to send');
+                  } finally {
+                    setSending(false);
+                  }
+                }}
+              >
+                {sending ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 }
