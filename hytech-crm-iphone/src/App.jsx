@@ -31,7 +31,8 @@ export default function App() {
   const [user] = useState({ id: 'patrick@hytech', name: 'Patrick' })
   const [appts, setAppts] = useState([])
   const [customers, setCustomers] = useState([])
-  const [leads, setLeads] = useState([])
+  const [leads, setLeads] = useState([])          // my leads (assigned)
+  const [allLeads, setAllLeads] = useState([])    // pipeline leads (all)
   const [view, setView] = useState({ id: 'home' }) // 'home' | 'appt-edit' | 'customer-detail' | 'jobs-list' | 'leads-list'
   const [draft, setDraft] = useState(null)
 
@@ -145,7 +146,14 @@ export default function App() {
 
                     {/* Leads card */}
                     <button
-                      onClick={() => setView({ id:'leads-list' })}
+                        onClick={async () => {
+                          try {
+                            // Fetch all leads (no assigned filter) for pipeline view
+                            const all = await fetchLeads()
+                            setAllLeads(all)
+                          } catch (e) { console.error('load pipeline leads failed', e) }
+                          setView({ id:'leads-list' })
+                        }}
                       className="group relative rounded-2xl aspect-[4/3] overflow-hidden shadow-2xl active:scale-[0.99] transition-transform"
                     >
                       <div className="absolute inset-0 bg-gradient-to-br from-[#0b1a2e] via-[#4c1d95] to-[#c084fc]" />
@@ -186,10 +194,10 @@ export default function App() {
           <JobsList items={appts} onSelect={onSelectAppt} />
         )}
         {view.id==='leads-list' && (
-          <LeadsList items={leads} onSelect={(l)=>{ /* optional: future details */ }} />
+          <LeadsList items={allLeads.length ? allLeads : leads} onSelect={(l)=>{ /* optional: future details */ }} />
         )}
         {view.id==='customer-detail' && (
-          <CustomerDetail initial={draft} onSave={saveCustomer} onCancel={goHome} onDelete={removeCustomer} />
+          <CustomerDetail initial={draft} appts={appts} onSave={saveCustomer} onCancel={goHome} onDelete={removeCustomer} />
         )}
       </div>
     </MobileShell>
