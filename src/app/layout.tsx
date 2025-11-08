@@ -20,10 +20,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <nav className="px-3 space-y-1">
               <NavLink href="/">Dashboard</NavLink>
               <NavLink href="/leads">Pipeline</NavLink>
-              <NavLink href="/measure">Measurements</NavLink>
-              <NavLink href="/proposals">Proposals</NavLink>
               <NavLink href="/calendar">Calendar</NavLink>
+              <NavLink href="/jobs">Jobs</NavLink>
+              <NavLink href="/payroll">Payroll</NavLink>
               <NavLink href="/customers">Customers</NavLink>
+              <NavLink href="/settings">Settings</NavLink>
             </nav>
           </aside>
           <main className="flex-1">

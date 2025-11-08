@@ -4,4 +4,7 @@
 
 /* App-specific tweaks can go below */
 html, body, #root { height: 100%; }
-body { background: #fff; }
+/* Fallback global background for the field app */
+body { 
+	background: linear-gradient(135deg, #f5f5f5 0%, #e7e7e7 50%, #d9d9d9 100%);
+}

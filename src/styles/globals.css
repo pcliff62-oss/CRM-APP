@@ -51,7 +51,7 @@ body {
 }
 
 .container-xl {
-  @apply max-w-7xl mx-auto px-4;
+  @apply w-full px-4; /* full width container */
 }
 
 /* FullCalendar weekend shading */

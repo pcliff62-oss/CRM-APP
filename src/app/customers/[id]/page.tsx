@@ -4,13 +4,11 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 import { formatPhone } from "@/components/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import MeasureFromCustomerButton from './MeasureFromCustomerButton';
 import { revalidatePath } from "next/cache";
-import { DropZone, FileList } from "./UploadsClient";
+import { DropZone, FileList, DocumentGrid, PhotoGrid } from "./UploadsClient";
 import nextDynamic from "next/dynamic";
-import CreateAppointmentModal from "./CreateAppointmentModal";
 import StartMeasurementButton from '@/components/StartMeasurementButton';
-const StageSelector = nextDynamic(() => import('@/components/StageSelector'), { ssr: false });
+import FlagPicker from '@/components/FlagPicker';
 const PropertyMap = nextDynamic(() => import("@/components/PropertyMapGoogle"), { ssr: false });
 const DroneScanButton = nextDynamic(() => import('./DroneScanButton'), { ssr: false });
 const DroneMissionList = nextDynamic(() => import('@/components/drone/DroneMissionList'), { ssr: false });
@@ -27,10 +25,11 @@ async function createJob(leadId: string, formData: FormData) {
 export default async function CustomerDetail({ params }: { params: { id: string } }) {
   const contact = await prisma.contact.findUnique({
     where: { id: params.id },
-    include: { leads: { include: { property: true } } }
+    include: { leads: { include: { property: true, assignee: true }, orderBy: { createdAt: 'desc' } } }
   });
   if (!contact) return null;
   const lead = contact.leads[0];
+  const contactAssignee = lead?.assignee || null;
   // Build a normalized address string similar to existing map usage
   let normalizedAddress: string | null = null;
   if (lead?.property) {
@@ -48,19 +47,59 @@ export default async function CustomerDetail({ params }: { params: { id: string 
     orderBy: { createdAt: "desc" }
   });
 
+  // Determine if this contact has an existing job appointment on any of their leads
+  const existingJob = await prisma.appointment.findFirst({
+    where: {
+      tenantId: contact.tenantId,
+      lead: { contactId: contact.id },
+      OR: [
+        { allDay: true },
+        { title: { startsWith: 'JOB:' } },
+        { jobStatus: { not: null } },
+        { crewId: { not: null } },
+        { squares: { gt: 0 } },
+      ],
+    },
+    orderBy: { start: 'desc' },
+    select: { id: true },
+  });
+  const hasJob = !!existingJob;
+
+  // Map internal stage codes to user-friendly labels for display under the name
+  const stageMap: Record<string, string> = {
+    LEAD: 'Lead',
+    PROSPECT: 'Prospect',
+    APPROVED: 'Approved',
+    COMPLETED: 'Completed',
+    INVOICED: 'Invoiced',
+    ARCHIVE: 'Archive',
+    SOLD: 'Sold',
+  };
+  const statusLabel = lead?.stage ? (stageMap[lead.stage] || lead.stage.charAt(0) + lead.stage.slice(1).toLowerCase()) : '';
+
+  // NOTE: Removed legacy reference to lead.appointments (no relation included in this query) to avoid type errors.
+
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader className="pt-6 pb-4">
+        <CardHeader className="pt-6 pb-4 bg-gradient-to-r from-[#0b1a2e] via-[#1773e6] to-[#60a5fa] text-white rounded-t-lg">
           <div className="flex flex-col items-center gap-4">
-            <div className="w-full flex justify-center">
-              <div className="max-w-full">
-                <StageSelector contactId={contact.id} value={lead?.stage as any || null} readOnly />
+            <div className="w-full flex flex-col gap-2">
+              <div className="w-full flex items-start justify-between gap-4">
+                <CardTitle className="flex items-center gap-2">
+                  <span>{contact.name}</span>
+                  <FlagPicker contactId={contact.id} initial={contact.flagColor as any} />
+                </CardTitle>
+                <ManageContactClient inline contact={{ id: contact.id, name: contact.name, email: contact.email || '', phone: contact.phone || '' }} property={lead?.property ? { id: lead.property.id, address1: lead.property.address1 } : null} />
               </div>
-            </div>
-            <div className="w-full flex items-start justify-between gap-4">
-              <CardTitle>{contact.name}</CardTitle>
-              <ManageContactClient inline contact={{ id: contact.id, name: contact.name, email: contact.email || '', phone: contact.phone || '' }} property={lead?.property ? { id: lead.property.id, address1: lead.property.address1 } : null} />
+              <div className="w-full flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm text-white/80">Status: {statusLabel || '—'}</div>
+                  <div className="mt-1 text-xs text-white/75">
+                    Assigned to: {contactAssignee ? (contactAssignee.name || contactAssignee.email || '—') : '—'}
+                  </div>
+                </div>
+              </div>
             </div>
             {typeof lead?.contractPrice === 'number' && isFinite(lead.contractPrice) && (
               <div className="w-full">
@@ -76,8 +115,8 @@ export default async function CustomerDetail({ params }: { params: { id: string 
             )}
           </div>
         </CardHeader>
-        <CardContent className="grid md:grid-cols-2 gap-4 text-sm">
-          <div>
+  <CardContent className="p-5 grid md:grid-cols-3 gap-4 text-sm bg-gradient-to-br from-slate-50 via-gray-100 to-slate-200">
+          <div className="md:col-span-1">
             <div>Email: {contact.email ? <a href={`mailto:${contact.email}`} className="text-blue-600 hover:underline">{contact.email}</a> : "—"}</div>
             <div>Phone: {contact.phone ? <a href={`tel:${normalizeTel(contact.phone)}`} className="text-blue-600 hover:underline">{formatPhone(contact.phone)}</a> : "—"}</div>
             <div>Address: {lead?.property?.address1 ?? "—"}</div>
@@ -99,7 +138,13 @@ export default async function CustomerDetail({ params }: { params: { id: string 
                 }
                 return (
                   <div>
-                    <PropertyMap address={address} lat={p?.lat ?? null} lng={p?.lng ?? null} propertyId={p?.id} />
+                    <PropertyMap
+                      address={address}
+                      lat={p?.lat ?? null}
+                      lng={p?.lng ?? null}
+                      propertyId={p?.id}
+                      className="relative w-full h-64 rounded-xl overflow-hidden"
+                    />
                     {p && (() => {
                       const addr = address.replace(', USA','');
                       const url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addr)}`;
@@ -118,44 +163,21 @@ export default async function CustomerDetail({ params }: { params: { id: string 
                 );
               })()}
               <div className="mt-3 flex items-center gap-2">
-                <CreateAppointmentModal leadId={lead?.id} />
-                <MeasureFromCustomerButton leadId={lead?.id} address={normalizedAddress} />
+                {hasJob && (
+                  <Link href="/jobs" className="inline-flex items-center justify-center w-full h-9 px-3 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-sm">
+                    View Job
+                  </Link>
+                )}
               </div>
             </div>
           </div>
-          <div className="space-y-6">
-            <div>
-              <div className="font-medium mb-2">Photos</div>
-              <DropZone contactId={contact.id} leadId={lead?.id || null} category="photos" folder="Photos" />
-              <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-                {files.filter((f: any) => f.category === "photos").map((f: any) => (
-                  <a key={f.id} href={`/api/files/${f.id}`} target="_blank" className="block border rounded overflow-hidden">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={`/api/files/${f.id}`} alt={f.name} className="w-full h-32 object-cover" />
-                    <div className="px-2 py-1 text-xs truncate">{f.name}</div>
-                  </a>
-                ))}
-              </div>
-              <div className="mt-4">
-                <DroneMissionList contactId={contact.id} leadId={lead?.id} propertyId={lead?.property?.id} />
-              </div>
-            </div>
-            <div>
-              <div className="font-medium mb-2">Documents</div>
-              <DropZone contactId={contact.id} leadId={lead?.id || null} category="documents" folder="Documents" />
-              <div className="mt-3">
-                <FileList items={files.filter((f: any) => f.category === "documents")} />
-              </div>
-            </div>
-            <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-6 md:col-span-2">
+            {/* Quick actions: Measure, Drone Scan, Create Proposal */}
+            <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {/* Keep Measure first */}
               <StartMeasurementButton variant="tile" leadId={lead?.id} address={normalizedAddress || undefined} />
-              {/* Drone Scan Button / Modal */}
-              <DroneScanButton
-                contactId={contact.id}
-                leadId={lead?.id}
-                propertyId={lead?.property?.id}
-                normalizedAddress={normalizedAddress || ''}
-              />
+
+              {/* Move Create Proposal into second slot */}
               <Link href={lead?.id ? `/proposals/create?lead=${lead.id}` : "/proposals/create"} className="group relative flex items-center gap-3 rounded-md border border-sky-300 bg-sky-100 hover:bg-sky-200 hover:border-sky-400 hover:shadow-sm transition px-4 py-3">
                 <span className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-sky-500 text-white group-hover:bg-sky-600 transition">
                   {/* Signed Document Icon */}
@@ -172,7 +194,51 @@ export default async function CustomerDetail({ params }: { params: { id: string 
                   <span className="mt-1 text-xs text-sky-800/80">Draft or edit proposal</span>
                 </div>
               </Link>
+
+              {/* Create Material List in third slot */}
+              <Link href={lead?.id ? `/materials/create?lead=${lead.id}` : "/materials/create"} className="group relative flex items-center gap-3 rounded-md border border-amber-300 bg-amber-100 hover:bg-amber-200 hover:border-amber-400 hover:shadow-sm transition px-4 py-3">
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-amber-500 text-white group-hover:bg-amber-600 transition">
+                  {/* Checklist icon */}
+                  <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" strokeWidth="2" className="h-5 w-5">
+                    <path d="M9 6h11" />
+                    <path d="M9 12h11" />
+                    <path d="M9 18h11" />
+                    <path d="M4 6l1.5 1.5L7.5 5" />
+                    <path d="M4 12l1.5 1.5L7.5 11" />
+                    <path d="M4 18l1.5 1.5L7.5 17" />
+                  </svg>
+                </span>
+                <div className="flex flex-col text-left">
+                  <span className="text-sm font-medium text-amber-900 leading-none">Create Material List</span>
+                  <span className="mt-1 text-xs text-amber-800/80">Start material takeoff</span>
+                </div>
+              </Link>
+
+              {/* Drone Scan moved to last (far right on lg screens) */}
+              <DroneScanButton
+                contactId={contact.id}
+                leadId={lead?.id}
+                propertyId={lead?.property?.id}
+                normalizedAddress={normalizedAddress || ''}
+              />
             </div>
+
+            <div>
+              <div className="font-medium mb-2">Photos</div>
+              <DropZone contactId={contact.id} leadId={lead?.id || null} category="photos" folder="Photos">
+                <PhotoGrid items={files.filter((f: any) => f.category === "photos")} />
+              </DropZone>
+              <div className="mt-4">
+                <DroneMissionList contactId={contact.id} leadId={lead?.id} propertyId={lead?.property?.id} />
+              </div>
+            </div>
+            <div>
+              <div className="font-medium mb-2">Documents</div>
+              <DropZone contactId={contact.id} leadId={lead?.id || null} category="documents" folder="Documents">
+                <DocumentGrid items={files.filter((f: any) => f.category === "documents")} />
+              </DropZone>
+            </div>
+            {/* End actions */}
           </div>
         </CardContent>
       </Card>

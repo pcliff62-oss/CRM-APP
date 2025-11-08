@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
 				name: c.name,
 				email: c.email || '',
 				phone: c.phone || '',
+				flagColor: (c as any).flagColor || null,
 				town: property?.city || '',
 				status: lead?.stage ? prettyStage(lead.stage) : '',
 				address: property?.address1 || '',
@@ -34,12 +35,17 @@ export async function GET(req: NextRequest) {
 				notes: lead?.notes || '',
 			};
 		})
-	// If a filter is provided, include items that match OR are unassigned so techs also see unassigned records
-	if (assignedTo) {
+	// Role-based filtering:
+	// SALES: only see contacts whose lead assignee matches them (ignore unassigned)
+	// Others: existing behavior (optional assignedTo filter including unassigned)
+	const role = (current as any)?.role || 'ADMIN';
+	if (role === 'SALES') {
+		const salesEmail = currentEmail;
+		items = items.filter(it => (String(it.assignedTo||'').toLowerCase()) === salesEmail);
+	} else if (assignedTo) {
 		const needle = assignedTo.toLowerCase();
 		items = items.filter((it) => {
 			const at = String(it.assignedTo || '').toLowerCase();
-			// match asked-for user, or current backend user, or unassigned
 			return at === needle || (currentEmail && at === currentEmail) || at === '';
 		});
 	}

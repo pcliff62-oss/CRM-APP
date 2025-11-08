@@ -29,9 +29,9 @@ function MiniMonth({ appts = [], onOpen, onSelectDay }) {
   while (cells.length) rows.push(cells.splice(0,7))
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-neutral-200">
-      <div className="flex items-center justify-between px-4 py-3">
-        <div className="font-medium">{today.toLocaleString([], { month: 'long', year: 'numeric' })}</div>
-        <button className="text-xs text-blue-600" onClick={onOpen}>Open Calendar</button>
+      <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-slate-900 via-blue-900 to-blue-700 text-white rounded-t-2xl">
+        <div className="font-medium text-white">{today.toLocaleString([], { month: 'long', year: 'numeric' })}</div>
+        <button className="text-xs text-white hover:bg-white/20 rounded px-2 py-1" onClick={onOpen}>Open Calendar</button>
       </div>
       <div className="grid grid-cols-7 gap-1 px-3 pb-3 text-xs select-none">
         {['S','M','T','W','T','F','S'].map(l => <div key={l} className="text-neutral-400 text-center py-1">{l}</div>)}
@@ -85,6 +85,21 @@ export default function Today({ appts = [], customers = [], onOpenCalendar, onOp
       .slice(0, 5)
   }, [appts])
   const dayItems = useMemo(() => appts.filter(a => (a.when||'').slice(0,10) === selectedDay), [appts, selectedDay])
+  // Format a friendly label for installs: "Name - Lead - 31.50 sq"
+  function formatInstallLabel(a){
+    if (!a?.job) return a?.title || ''
+    const raw = String(a?.title || '')
+    // Extract squares if present
+    const m = raw.match(/(\d+(?:\.\d+)?)\s*sq\b/i)
+    const sq = m ? Number(m[1]) : null
+    const sqStr = (sq!=null && isFinite(sq)) ? sq.toFixed(2) : null
+    // Prefer provided customerName; else strip prefix and trailing squares from title
+    let name = (a?.customerName || '').trim()
+    if (!name) {
+      name = raw.replace(/^JOB:\s*/i, '').replace(/\s*[–-]\s*(\d+(?:\.\d+)?)\s*sq\b.*$/i, '').trim()
+    }
+    return `${name || 'Customer'} - Lead${sqStr ? ` - ${sqStr} sq` : ''}`
+  }
   return (
     <div className="space-y-3">
       {/* Move today’s appointments to the top */}
@@ -115,12 +130,12 @@ export default function Today({ appts = [], customers = [], onOpenCalendar, onOp
         open={open.install}
         onToggle={() => setOpen(s => ({ ...s, install: !s.install }))}
       >
-        {upcomingInstalls.length ? (
+  {upcomingInstalls.length ? (
           <ul className="text-sm text-neutral-700 space-y-1">
             {upcomingInstalls.map(a => (
               <li key={a.id} className="flex items-center gap-2">
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                <span>{new Date(a.when).toLocaleString([], { dateStyle:'medium', timeStyle:'short' })} — {a.title}</span>
+    <span>{new Date(a.when).toLocaleString([], { dateStyle:'medium', timeStyle:'short' })} — {formatInstallLabel(a)}</span>
               </li>
             ))}
           </ul>

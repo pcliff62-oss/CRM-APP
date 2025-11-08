@@ -1,10 +1,17 @@
 import React from 'react'
 
-export default function LeadsList({ items = [], onSelect }) {
+export default function LeadsList({ items = [], onSelect, onBack }) {
   const leadsOnly = (items || []).filter(l => (l.status || '').toUpperCase() === 'LEAD')
   return (
     <div className="space-y-3">
-      <div className="font-medium">Leads</div>
+      <div className="flex items-center justify-between">
+        <div className="font-medium">Leads</div>
+        <button
+          type="button"
+          onClick={()=> onBack?.()}
+          className="px-3 py-1.5 text-xs rounded-full border border-neutral-300 bg-white active:bg-neutral-50 shadow-sm"
+        >← Back</button>
+      </div>
       {leadsOnly.length === 0 && (
         <div className="text-sm text-neutral-600">No leads in the pipeline.</div>
       )}

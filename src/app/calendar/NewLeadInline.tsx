@@ -16,7 +16,14 @@ export default function NewLeadInline({ initialDate, initialTime, onCreated }: P
 
   useEffect(() => { setForm(f => ({ ...f, date: initialDate, time: initialTime })); }, [initialDate, initialTime]);
 
-  useEffect(() => { (async () => { const r = await fetch('/api/users'); if (r.ok) { const d = await r.json(); setUsers(d.map((u: any) => ({ id: u.id, name: u.name || u.email }))); } })(); }, []);
+  useEffect(() => { (async () => {
+    const r = await fetch('/api/users');
+    if (!r.ok) return;
+    const d = await r.json().catch(()=>({ items: [] }));
+    const items = Array.isArray(d?.items) ? d.items : (Array.isArray(d) ? d : []);
+    const allowed = items.filter((u: any) => ['SALES','ADMIN'].includes(String(u.role||'').toUpperCase()));
+    setUsers(allowed.map((u: any) => ({ id: u.id, name: u.name || u.email })));
+  })(); }, []);
 
   useEffect(() => {
     if (!addrRef.current) return;

@@ -38,10 +38,10 @@ function parseGcsBucketAndKeyFromUrl(filePath: string): { bucket: string; key: s
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
   const tenantId = await getCurrentTenantId(req);
-  if (!tenantId) return new NextResponse('Unauthorized', { status: 401 });
+  const isDev = process.env.NODE_ENV !== 'production';
+  if (!tenantId && !isDev) return new NextResponse('Unauthorized', { status: 401 });
   const file = await prisma.file.findUnique({ where: { id: params.id } });
   if (!file) return new NextResponse('Not found', { status: 404 });
-  const isDev = process.env.NODE_ENV !== 'production';
   if (!isDev && file.tenantId !== tenantId) return new NextResponse('Not found', { status: 404 });
 
     const contentType = file.mime || 'application/octet-stream';
@@ -58,8 +58,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     };
     if (asAttachment) baseHeaders['Content-Disposition'] = `attachment; filename="${safeFileName}"`;
 
-    // Serve local files
-    if (file.path?.startsWith(`/uploads/${tenantId}/`)) {
+  // Serve local files (dev allows any tenant; prod requires tenant check above)
+  if (file.path?.startsWith(`/uploads/`)) {
       const abs = path.join(process.cwd(), 'public', file.path);
   const buf = await fs.readFile(abs);
   return new NextResponse(new Uint8Array(buf), { status: 200, headers: baseHeaders });

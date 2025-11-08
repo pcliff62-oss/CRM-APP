@@ -641,7 +641,7 @@ export default function PropertyMapGoogle({ address, lat, lng, propertyId, measu
 			{/* Live Map Layer (hidden when snapshot mode) */}
 			<div ref={mapContainerRef} 
 				className={`${isSnapshotMode ? 'hidden' : 'block'} absolute inset-0 overflow-hidden`} 
-				style={{ transform: `rotate(${heading}deg)`, transformOrigin:'50% 50%', cursor: (measurementMode && isPolygonDrawingMode()) ? 'none' : 'grab' }}
+				style={{ transform: `rotate(${heading}deg)`, transformOrigin:'50% 50%', cursor: (measurementMode && isPolygonDrawingMode()) ? 'none' : 'grab', borderRadius: 'inherit' }}
 				tabIndex={0}
 				onKeyDown={(e)=>{
 					if (!isPolygonDrawingMode()) return;

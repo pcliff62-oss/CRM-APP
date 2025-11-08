@@ -705,52 +705,6 @@ function Leads({ customers, onNameClick, onAddLead, onStatusChange, darkMode }) 
   );
 }
 
-/* ---- Archive (by Year) ---- */
-function Archive({ customers, darkMode }) {
-  // Group by year based on soldDate when status indicates done
-  const archived = customers.filter(c => ["Complete", "Invoiced"].includes(c.status));
-  const byYear = archived.reduce((map, c) => {
-    const yr = (c.soldDate ? new Date(c.soldDate) : new Date()).getFullYear();
-    map[yr] = map[yr] || [];
-    map[yr].push(c);
-    return map;
-  }, {});
-  const years = Object.keys(byYear).map(n => Number(n)).sort((a,b)=>b-a);
-  return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Archive</h1>
-      {years.length === 0 ? (
-        <div className="text-sm text-gray-500">No archived items yet.</div>
-      ) : (
-        years.map(yr => (
-          <Card key={yr} title={`Year ${yr}`} darkMode={darkMode}>
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className={darkMode ? "text-left text-gray-300" : "text-left text-gray-600"}>
-                  <th className="py-2 pr-4">Name</th>
-                  <th className="py-2 pr-4">Address</th>
-                  <th className="py-2 pr-4">Sold Date</th>
-                  <th className="py-2 pr-4">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byYear[yr].map((c) => (
-                  <tr key={c.id} className={darkMode ? "border-t bg-black text-white" : "border-t bg-white text-black"}>
-                    <td className="py-2 pr-4">{c.first} {c.last}</td>
-                    <td className="py-2 pr-4">{c.address}, {c.town} {c.zip}</td>
-                    <td className="py-2 pr-4">{c.soldDate || ""}</td>
-                    <td className="py-2 pr-4">{c.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
-        ))
-      )}
-    </div>
-  );
-}
-
 function Prospects({ customers, onNameClick, onStatusChange, darkMode }) {
   const prospects = customers.filter((c) => c.status === "Prospect");
   return (
@@ -781,14 +735,64 @@ function Jobs({ customers, onNameClick, onStatusChange, darkMode }) {
 /* ---- Calendar ---- */
 function Calendar({ darkMode }) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [appointments, setAppointments] = useState([
-    { id: 1, date: "2025-08-21", time: "09:00", type: "Roof Inspection", customer: "Marybeth Magnuson" },
-    { id: 2, date: "2025-08-22", time: "14:30", type: "Repair", customer: "Eileen Carlton" },
-  ]);
+  const [appointments, setAppointments] = useState([]);
   const [draggedAppointment, setDraggedAppointment] = useState(null);
   const [showDayView, setShowDayView] = useState(null);
   const [pendingDropDate, setPendingDropDate] = useState(null);
   const [hoveredDay, setHoveredDay] = useState(null);
+
+  // Load appointments from Next API and map to local shape
+  // Helpers for client-side fallback
+  const isWeekend = (d) => { const day = d.getDay(); return day === 0 || day === 6; };
+  const toStartOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+  const nextMonday = (d) => { const x = toStartOfDay(d); const day = x.getDay(); if (day === 6) { x.setDate(x.getDate()+2); } else if (day === 0) { x.setDate(x.getDate()+1); } return x; };
+  const addBusinessDaysExclusive = (start, days) => { let remaining = Math.max(1, days); let cur = nextMonday(start); while (remaining > 0) { if (!isWeekend(cur)) { remaining -= 1; if (remaining === 0) break; } cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate()+1); } return new Date(cur.getFullYear(), cur.getMonth(), cur.getDate()+1); };
+  const daysFromSquaresClient = (sq) => { const n = Number(sq ?? 0); if (!isFinite(n) || n <= 0) return 1; return Math.max(1, Math.ceil(n/10)); };
+  const parseSquaresFromTitle = (title) => { if (!title) return null; const m = String(title).match(/(\d+(?:\.\d+)?)\s*sq\b/i); return m ? parseFloat(m[1]) : null; };
+
+  async function loadAppointments() {
+    try {
+      const res = await fetch('/next-api/api/appointments');
+      const data = await res.json();
+      // Handle both { ok, items } envelope (mobile shape) and array (fullcalendar shape)
+      const items = Array.isArray(data) ? data : (data.items || []);
+      const mapped = items.map((a, idx) => {
+        // a.when is ISO; optional a.end and a.allDay present
+        let start = a.when ? new Date(a.when) : (a.start ? new Date(a.start) : null);
+        let end = a.end ? new Date(a.end) : null;
+        const isJob = !!a.allDay || /^JOB:\s*/i.test(a.title || '');
+        if (isJob && start) {
+          // Ensure all-day semantics and multi-day fallback if missing end
+          start = nextMonday(toStartOfDay(start));
+          if (!end) {
+            const sq = parseSquaresFromTitle(a.title);
+            const days = daysFromSquaresClient(sq);
+            end = addBusinessDaysExclusive(start, days);
+          }
+        }
+        const d = start;
+        const date = d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` : (a.date || "");
+        const hh = d ? d.getHours() : 9;
+        const mm = d ? d.getMinutes() : 0;
+        const time = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+        return {
+          id: a.id || `tmp-${idx}`,
+          date,
+          time,
+          type: a.title || a.workType || 'Appointment',
+          customer: a.customerName || a.lead?.contact?.name || '—',
+          _allDay: isJob ? true : !!a.allDay,
+          _end: end ? end.toISOString() : undefined,
+          _isJob: isJob,
+        };
+      });
+      setAppointments(mapped);
+    } catch (e) {
+      console.error('Failed to load appointments', e);
+    }
+  }
+
+  useEffect(() => { loadAppointments(); }, []);
 
   // Helpers
   function getMonthDays(date) {
@@ -852,6 +856,12 @@ function Calendar({ darkMode }) {
             >
               Today
             </button>
+            <button
+              className="border rounded px-3 py-1 text-sm bg-black text-white border-sky-400"
+              onClick={loadAppointments}
+            >
+              Reload
+            </button>
           </div>
         </div>
         <div className="flex items-center justify-between mb-2">
@@ -882,16 +892,25 @@ function Calendar({ darkMode }) {
                 const dayStr = d
                   ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
                   : "";
-                const dayAppointments = appointments.filter(a => a.date === dayStr);
+                const dayAppointments = appointments.filter(a => {
+                  if (a.date === dayStr) return true;
+                  if (a._allDay && a._end) {
+                    const d0 = new Date(`${a.date}T00:00:00`);
+                    const d1 = new Date(a._end);
+                    const cur = new Date(`${dayStr}T00:00:00`);
+                    return cur >= d0 && cur < d1;
+                  }
+                  return false;
+                });
                 const isHovered = hoveredDay === dayStr;
                 return (
                   <div
                     key={wi + "-" + di}
-                    className={`border-b border-r border-sky-400 align-top relative px-1 py-1
+                    className={`border-b border-r border-sky-400 align-top relative px-1 py-1 overflow-x-hidden
                       ${darkMode ? "bg-black" : "bg-white"}
                       ${isHovered && draggedAppointment ? "ring-2 ring-sky-400 z-10" : ""}
                     `}
-                    style={{ minWidth: 90, height: 90, verticalAlign: "top", transition: "box-shadow 0.1s" }}
+                    style={{ minWidth: 90, minHeight: 90, verticalAlign: "top", transition: "box-shadow 0.1s" }}
                     onDragOver={e => {
                       e.preventDefault();
                       if (draggedAppointment && dayStr) setHoveredDay(dayStr);
@@ -921,14 +940,14 @@ function Calendar({ darkMode }) {
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs font-semibold">{d ? d.getDate() : ""}</span>
                     </div>
-                    <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
                       {dayAppointments.map(app => (
                         <div
                           key={app.id}
                           draggable
                           onDragStart={() => setDraggedAppointment(app)}
-                          className={`cursor-move px-1 py-0.5 rounded text-[11px] font-semibold text-left truncate ${darkMode ? "bg-blue-900 text-white" : "bg-blue-100 text-blue-900"}`}
-                          style={{ lineHeight: "1.3" }}
+                          className={`cursor-move px-1 py-0.5 rounded text-[11px] font-semibold text-left w-full max-w-full whitespace-normal break-words break-all overflow-hidden ${app._isJob ? (darkMode ? "bg-green-700 text-white" : "bg-green-200 text-green-900") : (darkMode ? "bg-blue-900 text-white" : "bg-blue-100 text-blue-900")}`}
+                          style={{ lineHeight: "1.3", hyphens: "auto" }}
                         >
                           {app.type} — {app.customer}
                         </div>
@@ -1156,6 +1175,119 @@ function Dashboard({ customers, darkMode }) {
       </Card>
     </div>
   );
+}
+
+/* ---- Payroll ---- */
+function Payroll({ darkMode }) {
+  const [items, setItems] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  async function load() {
+    try {
+      const res = await fetch('/next-api/api/appointments')
+      const data = await res.json()
+      const list = (Array.isArray(data) ? data : (data.items||[]))
+        .filter(a => a.job || /JOB:/i.test(a.title||''))
+        .filter(a => String(a.jobStatus||'').toLowerCase() === 'submitted')
+        .map(a => ({
+          id: a.id,
+          date: a.when?.slice(0,10) || a.start?.slice(0,10),
+          customer: a.customerName || a.title || 'Job',
+          crewId: a.crewId,
+          squares: a.squares,
+          squaresUsed: a.squaresUsed,
+          rateTier: a.rateTier,
+          ratePerSq: a.ratePerSq,
+          installTotal: a.installTotal,
+          extrasTotal: a.extrasTotal,
+          grandTotal: a.grandTotal,
+          extrasJson: a.extrasJson || '[]',
+          attachments: a.attachments || [],
+          address: a.address,
+          workType: a.workType,
+        }))
+      setItems(list)
+    } catch (e) { console.error(e) }
+  }
+  useEffect(()=>{ load() }, [])
+
+  function fmt(n){ return (Number(n)||0).toLocaleString('en-US',{style:'currency',currency:'USD'}) }
+
+  async function saveAdjustments(patch) {
+    if (!selected) return
+    try {
+      setSaving(true)
+      const body = { id: selected.id, ...patch }
+      const r = await fetch('/next-api/api/appointments', { method:'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(body) })
+      const d = await r.json()
+      if (!r.ok || !d?.ok) throw new Error(d?.error || 'Save failed')
+      setSelected(d.item)
+      await load()
+    } catch(e) { alert(e?.message||String(e)) } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold">Payroll</h1>
+      <div className="grid grid-cols-3 gap-4">
+        <Card title="Crews – Payment Requests" darkMode={darkMode}>
+          <div className="text-xs text-gray-500 mb-2">Jobs marked complete by crews. Click to review and adjust.</div>
+          <ul className="divide-y">
+            {items.length===0 && <li className="text-sm text-gray-500">No submitted jobs.</li>}
+            {items.map(it => (
+              <li key={it.id} className="py-2 flex items-center justify-between">
+                <button onClick={()=>setSelected(it)} className={`text-left ${darkMode? 'text-sky-300':'text-blue-700'}`}>
+                  <div className="font-medium">{it.customer}</div>
+                  <div className="text-xs text-gray-500">{it.date} • {it.workType || 'Install'}</div>
+                </button>
+                <div className="text-sm font-semibold">{fmt(it.grandTotal)}</div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+        <Card title="Sales – Coming soon" darkMode={darkMode}>
+          <div className="text-sm text-gray-500">We’ll add sales commissions here.</div>
+        </Card>
+        <Card title="Employees – Coming soon" darkMode={darkMode}>
+          <div className="text-sm text-gray-500">We’ll add hourly/salary here.</div>
+        </Card>
+      </div>
+
+      {selected && (
+        <Card title="Crew Payment Request Details" darkMode={darkMode}>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <div className="font-semibold">Overview</div>
+              <div>Date: {selected.date}</div>
+              <div>Address: {selected.address || '—'}</div>
+              <div>Squares (total): {Number(selected.squares||0).toFixed(1)}</div>
+              <div>Used Squares: <input type="number" step="0.1" defaultValue={selected.squaresUsed||selected.squares||0} className="border rounded px-2 py-1 w-24 ml-2" onBlur={e=>saveAdjustments({ squaresUsed: Number(e.target.value)||0 })} /></div>
+              <div>Rate Tier: <input type="text" defaultValue={selected.rateTier||''} className="border rounded px-2 py-1 w-28 ml-2" onBlur={e=>saveAdjustments({ rateTier: e.target.value })} /></div>
+              <div>Rate / sq: $<input type="number" step="1" defaultValue={selected.ratePerSq||0} className="border rounded px-2 py-1 w-24 ml-1" onBlur={e=>saveAdjustments({ ratePerSq: Number(e.target.value)||0 })} /></div>
+              <div className="mt-2">Install Total: {fmt(selected.installTotal)}</div>
+              <div>Extras Total: {fmt(selected.extrasTotal)}</div>
+              <div className="font-semibold">Grand Total: {fmt(selected.grandTotal)}</div>
+            </div>
+            <div>
+              <div className="font-semibold mb-1">Extras</div>
+              <ul className="list-disc ml-5">
+                {(() => { try { return JSON.parse(selected.extrasJson||'[]') } catch { return [] } })().map((x,i)=> (
+                  <li key={x.id||i}>{x.title} — {fmt(x.price)}</li>
+                ))}
+              </ul>
+              <div className="font-semibold mt-3 mb-1">Photos</div>
+              <div className="grid grid-cols-4 gap-2">
+                {(selected.attachments||[]).map((a,i)=> (
+                  <img key={a.url||i} src={a.url||a.path||a.imagePath} alt={a.name||'photo'} className="w-full h-20 object-cover rounded border" />
+                ))}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  )
 }
 
 /* ---- Root Layout ---- */
@@ -1512,7 +1644,6 @@ export default function Crm() {
                 darkMode={darkMode}
               />
             )}
-            {/* FIX: Use handleStatusChange for both Prospects and Jobs */}
             {tab === "prospects" && (
               <Prospects
                 customers={customers}

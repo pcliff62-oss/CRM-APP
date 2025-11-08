@@ -1,8 +1,8 @@
-export default function MobileShell({ title = 'HyTech CRM', onPlus, onBack, showPlus = true, children, tab, onTabChange, frame = 'edge' }) {
+export default function MobileShell({ title = 'HyTech CRM', onPlus, onBack, showPlus = true, children, tab, onTabChange, frame = 'edge', hideTabs = false, bodyClassName = '' }) {
   const container =
     frame === 'device'
-      ? 'mx-auto h-screen max-w-[393px] bg-neutral-50 text-neutral-900 flex flex-col overflow-hidden rounded-2xl shadow-lg'
-      : 'h-screen w-full bg-neutral-50 text-neutral-900 flex flex-col overflow-hidden'
+  ? 'mx-auto h-screen max-w-[393px] bg-gradient-to-br from-neutral-100 via-neutral-200 to-neutral-300 text-neutral-900 flex flex-col overflow-hidden rounded-2xl shadow-lg'
+  : 'h-screen w-full bg-gradient-to-br from-neutral-100 via-neutral-200 to-neutral-300 text-neutral-900 flex flex-col overflow-hidden'
 
   return (
     <div className={container}>
@@ -30,13 +30,15 @@ export default function MobileShell({ title = 'HyTech CRM', onPlus, onBack, show
         </div>
       </div>
 
-      {/* Scroll area */}
-      <div className="flex-1 overflow-y-auto">{children}</div>
+  {/* Scroll area */}
+  <div className={`flex-1 ${bodyClassName || 'overflow-y-auto'}`}>{children}</div>
 
       {/* Bottom nav (sticky) */}
-      <div className="sticky bottom-0 z-10">
-        <BottomNav value={tab} onChange={onTabChange} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }} />
-      </div>
+      {!hideTabs && (
+        <div className="sticky bottom-0 z-10">
+          <BottomNav value={tab} onChange={onTabChange} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }} />
+        </div>
+      )}
     </div>
   )
 }
