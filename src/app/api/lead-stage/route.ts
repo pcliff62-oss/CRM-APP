@@ -1,4 +1,5 @@
 import prisma from '@/lib/db';
+import { scheduleJobForLead } from '@/lib/jobs';
 import { NextRequest } from 'next/server';
 import { revalidatePath } from 'next/cache';
 
@@ -16,10 +17,16 @@ export async function POST(req: NextRequest) {
     return new Response('Failed to update lead', { status: 500 });
   }
 
+  // If moved into APPROVED, auto-schedule a job as all-day block on next available days
+  let jobInfo: any = undefined;
+  if (lead.stage === 'APPROVED') {
+    try { jobInfo = await scheduleJobForLead(lead.id); } catch (e) { /* ignore */ }
+  }
+
   revalidatePath('/leads');
   if (lead.contactId) {
     revalidatePath('/customers');
     revalidatePath(`/customers/${lead.contactId}`);
   }
-  return Response.json({ ok: true, leadId: lead.id, contactId: lead.contactId, stage: lead.stage });
+  return Response.json({ ok: true, leadId: lead.id, contactId: lead.contactId, stage: lead.stage, job: jobInfo });
 }

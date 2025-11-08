@@ -33,7 +33,10 @@
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    "server/**/*.ts",
+    "hytech-crm-iphone/**/*.ts",
+    "hytech-crm-iphone/**/*.tsx"
   ],
   "exclude": [
   "node_modules",

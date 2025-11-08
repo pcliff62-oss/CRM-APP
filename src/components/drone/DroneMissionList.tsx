@@ -67,6 +67,9 @@ export const DroneMissionList: React.FC<Props> = ({ contactId, propertyId, leadI
     URL.revokeObjectURL(url);
   };
 
+  // If there are no missions, hide the entire section
+  if (missions.length === 0) return null;
+
   return (
     <Card className="p-4 space-y-3">
       <div className="flex items-center justify-between">

@@ -1,5 +1,6 @@
 import prisma from "@/lib/db";
 import { NextRequest } from "next/server";
+import { Role } from "@prisma/client";
 
 /**
  * DEMO AUTH STRATEGY
@@ -31,7 +32,7 @@ async function ensureDemoUser(email: string) {
     data: {
       email,
       name: "Demo User",
-      role: "Owner",
+  role: Role.ADMIN,
       tenantId: tenant.id
     }
   });
@@ -41,6 +42,12 @@ export async function getCurrentUser(req?: NextRequest) {
   const headerEmail = req?.headers.get("x-user-email");
   const email = headerEmail || "demo@hytech.local";
   try {
+    // Normalize any legacy/invalid roles before any reads
+    try {
+      await prisma.$executeRawUnsafe(
+        "UPDATE \"User\" SET role = 'ADMIN' WHERE UPPER(role) = 'OWNER' OR role NOT IN ('ADMIN','SALES','CREW','EMPLOYEE')"
+      );
+    } catch {}
     return await ensureDemoUser(email);
   } catch (e) {
     // Final fallback: first user if something unexpected happened

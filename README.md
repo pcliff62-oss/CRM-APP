@@ -86,4 +86,38 @@ Plan aerial photo capture missions for future orthomosaic + roof metric generati
 Not yet included: actual DJI flight execution, real photogrammetry, or results visualization.
 
 See full documentation: `docs/DRONE_SCAN.md`
-# hytech-roofing-crm-starter.
+
+---
+
+Field App (experimental, from jesse-upload)
+
+This repository also includes a Vite-based mobile/field app prototype intended to run alongside the CRM and call its APIs.
+
+Backend (local dev)
+
+This prototype includes a minimal Express + TypeScript backend (server/) that proxies storage operations to Google Cloud Storage. It is intended for local development only and reads credentials from environment variables.
+
+Required environment variables (set in your shell or a .env file inside /server):
+
+- GCS_PROJECT_ID
+- GCS_BUCKET
+- GCS_CLIENT_EMAIL
+- GCS_PRIVATE_KEY (paste the JSON private_key value; if it contains literal "\n" sequences they will be normalized)
+
+Run locally:
+
+1. Start the backend in one terminal:
+
+```bash
+cd server
+npm install
+npm run dev
+```
+
+2. Start the front-end in another terminal (root):
+
+```bash
+npm run dev
+```
+
+The field app may also use `VITE_API_BASE` for calling a deployed API; set it in `.env.local` or `.env`.

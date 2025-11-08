@@ -1,0 +1,32 @@
+Deadweight Cleaner Report
+Reachable: 36
+Total src files: 59
+Unreferenced: 23
+Move candidates: 1
+
+FILES TO QUARANTINE:
+/Users/jesseferreira/hytech-crm/src/styles/theme.css :: unreferenced-identical-hash :: checked={html:false,css:false,js:false}
+
+Unmoved suspects (not confidently duplicate): 22
+  /Users/jesseferreira/hytech-crm/src/App.css
+  /Users/jesseferreira/hytech-crm/src/Crm.jsx version 1 
+  /Users/jesseferreira/hytech-crm/src/Crm.jsx version 2
+  /Users/jesseferreira/hytech-crm/src/Crm.jsx.tmp
+  /Users/jesseferreira/hytech-crm/src/assets/react.svg
+  /Users/jesseferreira/hytech-crm/src/components/NoApiBanner.jsx
+  /Users/jesseferreira/hytech-crm/src/debug/ApiProbe.tsx
+  /Users/jesseferreira/hytech-crm/src/index.css
+  /Users/jesseferreira/hytech-crm/src/lib/api/base.ts
+  /Users/jesseferreira/hytech-crm/src/lib/api/customers.ts
+  /Users/jesseferreira/hytech-crm/src/lib/api/schedules.ts
+  /Users/jesseferreira/hytech-crm/src/lib/api/sync.ts
+  /Users/jesseferreira/hytech-crm/src/lib/api/tasks.ts
+  /Users/jesseferreira/hytech-crm/src/lib/api/types.ts
+  /Users/jesseferreira/hytech-crm/src/lib/api/uploads.ts
+  /Users/jesseferreira/hytech-crm/src/lib/dev/fixtures.ts
+  /Users/jesseferreira/hytech-crm/src/lib/hooks/customers.ts
+  /Users/jesseferreira/hytech-crm/src/lib/hooks/schedules.ts
+  /Users/jesseferreira/hytech-crm/src/lib/hooks/tasks.ts
+  /Users/jesseferreira/hytech-crm/src/lib/metrics/hooks.js
+MOVED src/styles/theme.css -> .trash/20250924-0018/src/styles/theme.css
+Quarantine complete.

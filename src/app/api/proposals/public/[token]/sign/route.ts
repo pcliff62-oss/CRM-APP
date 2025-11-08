@@ -30,6 +30,15 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       templateBody: JSON.stringify(snapshot),
     },
   });
-
-  return NextResponse.json({ ok: true, id: updated.id, status: updated.status, signedAt: snapshot.signature.signedAt });
+  // Trigger finalize workflow (PDF + file + lead status/total)
+  try {
+    const base = process.env.PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || `http://localhost:3000`;
+    const { jwtSign, getSignSecret } = await import("@/lib/jwt");
+    const tokenOut = (await import("@/lib/jwt")).jwtSign({ id: updated.id, exp: Math.floor(Date.now() / 1000) + 60 * 60 }, getSignSecret());
+    const res = await fetch(`${base.replace(/\/$/, '')}/api/proposals/public/${encodeURIComponent(tokenOut)}/finalize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, email, signatureDataUrl, snapshot }) });
+    const j = await res.json().catch(()=>({}));
+    return NextResponse.json({ ok: true, id: updated.id, status: updated.status, signedAt: snapshot.signature.signedAt, finalize: j || null });
+  } catch {
+    return NextResponse.json({ ok: true, id: updated.id, status: updated.status, signedAt: snapshot.signature.signedAt });
+  }
 }

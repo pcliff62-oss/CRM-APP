@@ -168,6 +168,71 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     try { return canvas.toDataURL('image/png'); } catch { return ''; }
   };
 
+  // Insert or update the acceptance date immediately after the "DATE OF ACCEPTANCE:" label
+  function stampAcceptanceDate() {
+    try {
+      const root = containerRef.current as HTMLElement | null;
+      if (!root) return false;
+      const format = (d: Date) => {
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${mm}/${dd}/${yyyy}`;
+      };
+      const today = format(new Date());
+      const re = /DATE\s+OF\s+ACCEPTANCE\s*:/i;
+      const nodes = Array.from(root.querySelectorAll('span,td,th,p,div,b,strong,u,i,em')) as HTMLElement[];
+      const cands = nodes.filter(el => re.test(el.textContent || ''));
+      if (!cands.length) return false;
+      // Choose the leaf-most container: contains label but none of its descendants contain it
+      const leafs = cands.filter(el => !Array.from(el.querySelectorAll('*')).some(ch => re.test((ch as HTMLElement).textContent || '')));
+      const target = leafs[0] || cands[0];
+      if (!target) return false;
+      // Reuse existing span if present
+      let span = target.querySelector('.acceptance-date') as HTMLElement | null;
+      if (!span) {
+        span = document.createElement('span');
+        span.className = 'acceptance-date';
+        // Large italic text as requested
+        span.style.fontStyle = 'italic';
+        span.style.fontSize = '18pt';
+      }
+      span.textContent = today;
+      // Insert right after the label text node (after the colon)
+      let inserted = false;
+      const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const tn = walker.currentNode as Text;
+        const txt = tn.textContent || '';
+        const m = txt.match(re);
+        if (!m) continue;
+        const idx = txt.search(re) + m[0].length; // after the label
+        const before = txt.slice(0, idx);
+        const after = txt.slice(idx).replace(/^\s+/, ' ');
+        const parent = tn.parentNode as Node;
+        const frag = document.createDocumentFragment();
+        frag.appendChild(document.createTextNode(before));
+        frag.appendChild(document.createTextNode(' '));
+        frag.appendChild(span);
+        if (after) frag.appendChild(document.createTextNode(after));
+        parent.replaceChild(frag, tn);
+        inserted = true;
+        break;
+      }
+      if (!inserted) {
+        // Fallback: append after target content
+        if (target.lastChild && target.lastChild.nodeType === Node.TEXT_NODE) {
+          (target.lastChild as Text).textContent = ((target.lastChild as Text).textContent || '') + ' ';
+        } else {
+          target.appendChild(document.createTextNode(' '));
+        }
+        target.appendChild(span);
+        inserted = true;
+      }
+      return inserted;
+    } catch { return false; }
+  }
+
   // Insert or update the signature overlay image and printed name
   const insertSignatureReact = (text: string, font: string) => {
     // Prefer placing near the "Accepted by" label using an overlay so layout doesn't change
@@ -195,6 +260,8 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     const root = containerRef.current as HTMLElement | null;
     const nameSpan = root?.querySelector('#customer-signature-name') as HTMLElement | null;
     if (nameSpan) nameSpan.textContent = text;
+  // Immediately stamp the acceptance date after the label
+  try { stampAcceptanceDate(); } catch {}
     return true;
   };
 
@@ -226,7 +293,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   /* Unified page width and print size (Letter 8.5x11) */
   .proposal-doc .max-w-2xl{ max-width: none; width: 8.5in; margin-left:auto; margin-right:auto; }
   .proposal-html{ width: 8.5in; max-width: 100%; margin-left:auto; margin-right:auto; }
-  .proposal-html table{ width: 100%; float: none !important; }
+  .proposal-html table{ width: 100%; float: none !important; position: relative; z-index: 1; }
   .proposal-html img{ max-width: 100%; height: auto; }
 
   /* Force price pills visible in View regardless of template CSS */
@@ -264,6 +331,10 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       linear-gradient(90deg, rgba(29,78,216,0) 0%, rgba(29,78,216,0.5) 10%, rgba(29,78,216,0.9) 50%, rgba(29,78,216,0.5) 90%, rgba(29,78,216,0) 100%);
     filter: saturate(1.1);
     box-shadow: 0 0 6px rgba(29,78,216,0.25);
+    position: relative;
+    z-index: 0;
+    clear: both;
+  pointer-events: none;
     /* tapered ends */
     -webkit-mask-image: linear-gradient(to right, transparent, black 14%, black 86%, transparent);
     mask-image: linear-gradient(to right, transparent, black 14%, black 86%, transparent);
@@ -435,6 +506,8 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         const isSkylights = (t: HTMLElement) => /\bSKYLIGHTS?\b/i.test(t.textContent || '');
         for (const tbl of tables) {
           if (!isSkylights(tbl)) continue;
+          // Ensure Skylights tables paint above decorative dividers
+          try { if (getComputedStyle(tbl).position === 'static') (tbl as HTMLElement).style.position = 'relative'; (tbl as HTMLElement).style.zIndex = '2'; } catch {}
           // Unwrap any pills that may have been injected in earlier passes
           const pills = Array.from(tbl.querySelectorAll('label.price-choice')) as HTMLElement[];
           for (const pill of pills) {
@@ -908,7 +981,10 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       }
     }
 
-    // Unified selection gating for Roofing, Siding, Decking, and all Extras
+  // Provide auto section ids for diagnostics/styling hooks
+  let sectionAutoId = 0;
+
+  // Unified selection gating for Roofing, Siding, Decking, and all Extras
   function applySelectionGating(container: HTMLElement) {
       try {
         const s: any = snapshot || {};
@@ -1007,6 +1083,14 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           if (!key) continue;
           // Mark section root so enhancements are scoped per-section
           try { (tbl as HTMLElement).setAttribute('data-section', key); } catch {}
+          try { (tbl as HTMLElement).setAttribute('data-section-type', key); } catch {}
+          try {
+            const dataset = (tbl as HTMLElement).dataset || ({} as DOMStringMap);
+            if (!dataset.sectionId) {
+              sectionAutoId += 1;
+              (tbl as HTMLElement).setAttribute('data-section-id', `${key || 'section'}-${sectionAutoId}`);
+            }
+          } catch {}
           let show: boolean | null = null;
           if (key.startsWith('roofing:')) {
             if (workSel.roofing === false) show = false;
@@ -1739,7 +1823,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     }
 
     // Ensure Asphalt COLOR: blank is always visible (idempotent; prevents duplicate lines)
-    function ensureAsphaltColorBlank(container: HTMLElement) {
+  function ensureAsphaltColorBlank(container: HTMLElement) {
       try {
         const blocks = Array.from(container.querySelectorAll('table, p, div, span, td, th')) as HTMLElement[];
         const hasAsphalt = (el: HTMLElement) => /ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX/i.test(el.textContent || '');
@@ -1757,8 +1841,18 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           // If a blank already exists anywhere in this host, keep only the first and skip
           const existingBlanks = Array.from(host.querySelectorAll('.asphalt-color-blank')) as HTMLElement[];
           if (existingBlanks.length > 0) {
-            // Remove any duplicates beyond the first
-            existingBlanks.slice(1).forEach(b => b.remove());
+            existingBlanks.forEach((blank, idx) => {
+              // Normalize appearance and keep only the first
+              (blank as HTMLElement).style.display = 'inline-block';
+              if (!(blank as HTMLElement).style.minWidth) (blank as HTMLElement).style.minWidth = '220px';
+              (blank as HTMLElement).style.borderBottom = '2px solid #facc15';
+              (blank as HTMLElement).style.background = '#fef08a';
+              (blank as HTMLElement).style.padding = (blank as HTMLElement).style.padding || '0 6px';
+              (blank as HTMLElement).style.height = (blank as HTMLElement).style.height || '1.1em';
+              (blank as HTMLElement).style.lineHeight = (blank as HTMLElement).style.lineHeight || '1.1';
+              (blank as HTMLElement).style.marginLeft = (blank as HTMLElement).style.marginLeft || '6px';
+              if (idx > 0) blank.remove();
+            });
             continue;
           }
 
@@ -1828,13 +1922,35 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           const blank = document.createElement('span');
           blank.className = 'asphalt-color-blank';
           blank.setAttribute('data-injected', '1');
-          blank.setAttribute('style', 'display:inline-block; min-width:280px; border-bottom:2px solid #0a0a0a; height:1.1em; line-height:1.1;');
           blank.innerHTML = '&nbsp;';
+          blank.style.display = 'inline-block';
+          blank.style.minWidth = '280px';
+          blank.style.borderBottom = '2px solid #facc15';
+          blank.style.background = '#fef08a';
+          blank.style.padding = '0 6px';
+          blank.style.height = '1.1em';
+          blank.style.lineHeight = '1.1';
+          blank.style.marginLeft = '6px';
           const parent = leaf.parentElement || host;
           try {
             parent.insertBefore(blank, leaf.nextSibling);
           } catch {
             host.appendChild(blank);
+          }
+          // Trim a few immediately following empty siblings left from placeholders
+          let cleanup: Node | null = blank.nextSibling;
+          let trims = 0;
+          while (cleanup && trims < 3) {
+            const next = cleanup.nextSibling;
+            if (cleanup.nodeType === Node.TEXT_NODE && /^\s*$/.test(((cleanup as Text).textContent || ''))) {
+              cleanup.parentNode?.removeChild(cleanup);
+              cleanup = next; trims++; continue;
+            }
+            if (cleanup instanceof HTMLElement) {
+              const text = (cleanup.textContent || '').replace(/[_\s\u00A0]+/g, '');
+              if (!text && !cleanup.querySelector('img,table,video')) { cleanup.remove(); cleanup = next; trims++; continue; }
+            }
+            break;
           }
         }
       } catch {}

@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       templateBody: JSON.stringify(snapshot),
       status: "Sent",
       mergedHtml: grandTotal != null ? String(grandTotal) : null,
+      grandTotal: grandTotal != null ? Number(grandTotal) : null,
     };
     const proposal = await prisma.proposal.create({ data });
 

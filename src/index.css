@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Temporary visual check */
+:root { color-scheme: light; }
+
+html, body, #root {
+	height: 100%;
+  max-width: 100%;
+}
+
+/* Absolute clamp against horizontal scroll on the page */
+html, body, #root { overflow-x: hidden; }
+
+/* Hard clamp inside the main scroll root: prevent any descendant from exceeding container width */
+[data-scroll-root] { overflow-x: clip; }
+[data-scroll-root] *, [data-scroll-root] *::before, [data-scroll-root] *::after {
+	min-width: 0; /* allow flex/grid items to shrink */
+	max-width: 100%; /* cap intrinsic widths to container */
+	box-sizing: border-box; /* padding stays inside width */
+	word-break: break-word;
+	overflow-wrap: anywhere;
+}
+
+body {
+	margin: 0;
+	overflow: hidden; /* page itself doesn't scroll; only <main> does */
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+/* Prevent iOS text autosizing that can subtly scale text */
+/* Keep default text size adjustment; removed to satisfy linter */
+
+/* Prevent any horizontal scrolling; clamp media to container width */
+main { overflow-x: hidden; }
+img, video, canvas, svg { max-width: 100%; height: auto; }
+
+/* Limit app width on wide screens (simulator/desktop) to a phone-like width and center it.
+	 Has no effect on actual phones (<540px). */
+@media (min-width: 540px) {
+	#root > * {
+		max-width: 430px; /* ~iPhone 12/13/14 width (390) + padding allowance */
+		margin-left: auto;
+		margin-right: auto;
+		width: 100%;
+	}
+}
+
+/* iOS zoom and layout safety (idempotent) */
+html, body, #root { height: 100%; }
+body { margin: 0; overflow: hidden; }
+input, textarea, select { font-size: 16px !important; }

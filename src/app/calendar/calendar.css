@@ -1,0 +1,87 @@
+/* Calendar UI polish to mimic native calendar aesthetics */
+
+/* Header */
+.fc .fc-toolbar.fc-header-toolbar {
+  padding: 4px 8px;
+  border-bottom: 1px solid #e5e7eb; /* slate-200 */
+}
+.fc .fc-toolbar-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a; /* slate-900 */
+}
+
+/* Column headers */
+.fc .fc-col-header-cell {
+  background: #fff;
+  color: #475569; /* slate-600 */
+  font-weight: 600;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+/* Grid lines */
+.fc .fc-timegrid-slot,
+.fc .fc-scrollgrid,
+.fc .fc-daygrid-body,
+.fc .fc-timegrid-divider,
+.fc .fc-timegrid-axis {
+  border-color: #e5e7eb;
+}
+
+/* Today highlight */
+.fc .fc-day-today {
+  background: #f8fafc; /* slate-50 */
+}
+
+/* Weekend subtle shading */
+.fc .fc-day-sat:not(.fc-day-today),
+.fc .fc-day-sun:not(.fc-day-today) {
+  background: #fafafa;
+}
+
+/* Event pills */
+.fc .fc-event {
+  border: none;
+  border-radius: 8px;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06);
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+/* Month (dayGrid) view: non-job (appointment) bubble fallback color + containment */
+.fc .fc-daygrid-event:not(.job-green) {
+  background-color: #3b82f6; /* blue-500 fallback */
+  color: #fff;
+}
+.fc .fc-daygrid-event:not(.job-green) .fc-appt {
+  word-break: break-word;        /* break long tokens */
+  overflow-wrap: anywhere;       /* allow breaks anywhere to avoid spillover */
+}
+.fc .fc-daygrid-event:not(.job-green) .fc-appt > div {
+  white-space: nowrap;           /* keep each line to a single row */
+  text-overflow: ellipsis;       /* trim with ellipsis when too long */
+  overflow: hidden;              /* and never overflow the bubble */
+  max-width: 100%;
+}
+
+/* Ensure job (all-day) spans aren't constrained */
+.fc .fc-daygrid-event.job-green,
+.fc .fc-daygrid-event.job-green .fc-event-main {
+  overflow: visible;
+}
+
+/* (no daygrid override for borders) */
+
+/* All-day row spacing */
+.fc .fc-timegrid-axis-frame {
+  padding-right: 4px;
+}
+.fc .fc-timegrid-body {
+  background: #fff;
+}
+
+/* Green jobs style fallback when Tailwind classes are not applied */
+.fc .fc-event.job-green {
+  background: #16a34a; /* green-600 */
+  color: #fff;
+}

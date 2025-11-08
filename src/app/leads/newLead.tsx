@@ -20,7 +20,7 @@ type FormState = {
 
 export default function NewLeadButton() {
   const [open, setOpen] = useState(false);
-  const [users, setUsers] = useState<Array<{ id: string; name: string }>>([]);
+  const [users, setUsers] = useState<Array<{ id: string; name: string; role?: string }>>([]);
   const [form, setForm] = useState<FormState>({ name: "", email: "", phone: "", address: "", notes: "", category: "", date: today(), time: nextHalfHour() });
   const addrRef = useRef<HTMLInputElement | null>(null);
 
@@ -28,7 +28,11 @@ export default function NewLeadButton() {
   useEffect(() => {
     (async () => {
       const res = await fetch("/api/users");
-      if (res.ok) setUsers((await res.json()).map((u: any) => ({ id: u.id, name: u.name || u.email })));
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({ items: [] }));
+      const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+      const filtered = items.filter((u: any) => ['SALES','ADMIN','MANAGER'].includes(String(u.role||'').toUpperCase()));
+      setUsers(filtered.map((u: any) => ({ id: u.id, name: u.name || u.email, role: u.role })));
     })();
   }, []);
 

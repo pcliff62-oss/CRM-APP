@@ -1,37 +1,42 @@
-# Node / Next.js
+## Node / Next.js
 node_modules/
 .next/
 .out/
 .vercel/
 
-# Build outputs
+## Build outputs
 build/
 dist/
+dist-ssr/
 coverage/
 
-# Logs
+## Logs
+logs/
+*.log
+lerna-debug.log*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# OS / Editor
+## OS / Editor
 .DS_Store
 .vscode/
+!.vscode/extensions.json
 .idea/
 
-# Env & secrets
+## Env & secrets
 .env
 .env.*
 !.env.example
 
-# Prisma/SQLite local dev
+## Prisma/SQLite local dev
 data.db
 *.sqlite
 *.sqlite-journal
 prisma/dev.db
 
-# Python / AI worker
+## Python / AI worker
 __pycache__/
 *.pyc
 .venv/
@@ -40,13 +45,17 @@ ai_worker/__pycache__/
 ai_worker/.venv*/
 .venv-ai-worker/
 
-# Misc
+## Misc
 *.local
-*.log
 .tmp/
 .cache/
+.server.pid
+.next.pid
 
-# App specific
+## App specific
 public/uploads/
 public/assets/*.map
 packages/**/.unzipped/
+
+## Project artifacts
+tsconfig.tsbuildinfo

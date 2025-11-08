@@ -1,5 +1,11 @@
 import prisma from '@/lib/db';
-import NaivePolygonEditor from '@/components/drone/NaivePolygonEditor';
+import dynamic from 'next/dynamic';
+
+// Load the heavy client-side editor only in the browser to avoid SSR chunk issues
+const NaivePolygonEditor = dynamic(() => import('@/components/drone/NaivePolygonEditor'), {
+  ssr: false,
+  loading: () => <div className="p-4 text-sm">Loading editor…</div>,
+});
 
 export default async function MeasurementEditPage({ params }: { params: { id: string } }) {
   const m = await prisma.measurement.findUnique({ where: { id: params.id } });

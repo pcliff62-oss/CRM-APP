@@ -38,22 +38,26 @@ export default async function LeadsPage() {
   return (
     <div className="space-y-4 relative">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Leads</h1>
+        <h1 className="text-2xl font-semibold">Pipeline</h1>
         <NewLeadButton />
       </div>
   {/* Global pipeline scroller to adjust a selected lead's stage */}
   <InteractivePipeline />
   <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
-      {stages.map((s) => {
+    {stages.map((s) => {
         const totalVal = stageTotals[s.key];
+        const count = leads.filter((l: any) => l.stage === s.key).length;
         return (
-          <div key={s.key} className="space-y-1">
+      <div key={s.key} id={`stage-${s.key.toLowerCase()}`} className="space-y-1 scroll-mt-24">
             {typeof totalVal === 'number' && !isNaN(totalVal) ? (
               <div className="text-xs font-semibold text-emerald-700 tracking-wide uppercase">Total: ${totalVal.toLocaleString()}</div>
             ) : <div className="h-4" />}
             <Card className="min-h-[60vh]">
-              <CardHeader>
-                <CardTitle>{s.label}</CardTitle>
+              <CardHeader className="bg-gradient-to-r from-slate-900 via-blue-900 to-blue-700 text-white rounded-t-xl">
+                <CardTitle className="text-white font-bold flex items-center justify-between">
+                  <span>{s.label}</span>
+                  <span className="text-white/90 text-sm">{count}</span>
+                </CardTitle>
               </CardHeader>
                <CardContent className="space-y-3" data-stage-container={s.key}>
                 {leads.filter((l: { stage: string }) => l.stage === s.key).map((lead: any) => (
@@ -62,6 +66,10 @@ export default async function LeadsPage() {
                     <div className="font-medium">
                       {lead.contact?.name || lead.title || 'Untitled Lead'}
                     </div>
+                    {/* Price for approved jobs */}
+                    {s.key === 'APPROVED' && typeof lead.contractPrice === 'number' && !isNaN(lead.contractPrice) && (
+                      <div className="text-sm font-semibold text-emerald-600">${lead.contractPrice.toLocaleString()}</div>
+                    )}
                     {/* Category (if present) */}
                     {lead.category ? (
                       <div className="text-xs text-slate-500">{lead.category}</div>

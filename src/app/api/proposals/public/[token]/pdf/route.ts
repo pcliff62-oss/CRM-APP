@@ -3,6 +3,7 @@ import prisma from "@/lib/db";
 import { jwtVerify, getSignSecret } from "@/lib/jwt";
 import path from "path";
 import { promises as fs } from "fs";
+import { revalidatePath } from "next/cache";
 
 export async function POST(req: NextRequest, { params }: { params: { token: string } }) {
   const token = params.token;
@@ -111,11 +112,35 @@ ${htmlContent}
       }
     });
 
-    return NextResponse.json({ 
-      ok: true, 
-      fileId: fileRec.id, 
-      url, 
-      name: attemptName 
+    // Parse approved price from the saved HTML and persist on the lead
+    try {
+      // Look for <span id="final-total-investment" ...>25,805.00</span>
+      const m = String(htmlContent).match(/id=["']final-total-investment["'][^>]*>([^<]+)/i);
+      const text = (m && m[1] ? m[1] : '').trim();
+      const parsed = Number(text.replace(/[^\d.\-]/g, ''));
+      if (leadId && isFinite(parsed) && parsed > 0) {
+        const existing = await prisma.lead.findUnique({ where: { id: leadId } });
+        await prisma.lead.update({ 
+          where: { id: leadId }, 
+          data: { 
+            contractPrice: parsed,
+            stage: existing?.stage === 'APPROVED' ? undefined as any : 'APPROVED'
+          } as any
+        });
+        // Revalidate pipeline and customer pages so totals and banner update
+        try {
+          revalidatePath('/leads');
+          revalidatePath('/customers');
+          if (contactId) revalidatePath(`/customers/${contactId}`);
+        } catch {}
+      }
+    } catch {}
+
+    return NextResponse.json({
+      ok: true,
+      fileId: fileRec.id,
+      url,
+      name: attemptName
     });
     
   } catch (error: any) {
