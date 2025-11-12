@@ -10,6 +10,16 @@ datasource db {
 model Tenant {
   id                   String                @id @default(cuid())
   name                 String
+  // Company info fields
+  phone                String? // Company primary phone
+  email                String? // Company contact email
+  address1             String? // Street address line 1
+  address2             String? // Street address line 2
+  city                 String? // City
+  state                String? // State / Province
+  postal               String? // Postal / ZIP code
+  logoPath             String? // Uploaded logo file path
+  licensesJson         String? // JSON array of { type, number, expires }
   createdAt            DateTime              @default(now())
   appointments         Appointment[]
   contacts             Contact[]
@@ -36,6 +46,12 @@ model User {
   role                 Role                  @default(EMPLOYEE)
   tenantId             String
   createdAt            DateTime              @default(now())
+  /// Sales commission percent (e.g., 5 for 5%)
+  commissionPercent    Float?
+  /// Sales base pay amount applied per selected period
+  basePayAmount        Float?
+  /// Period that base pay applies to (JOB | WEEK | MONTH)
+  basePayPeriod        BasePayPeriod?
   appointments         Appointment[]
   assignedLeads        Lead[]                @relation("LeadAssignee")
   tenant               Tenant                @relation(fields: [tenantId], references: [id])
@@ -47,6 +63,12 @@ enum Role {
   SALES
   CREW
   EMPLOYEE
+}
+
+enum BasePayPeriod {
+  JOB
+  WEEK
+  MONTH
 }
 
 model Property {
@@ -165,7 +187,7 @@ model Contact {
   email         String?
   phone         String?
   organization  String?
-  flagColor     String?        // 'red' | 'yellow' | 'green'
+  flagColor     String? // 'red' | 'yellow' | 'green'
   createdAt     DateTime       @default(now())
   tenant        Tenant         @relation(fields: [tenantId], references: [id])
   droneMissions DroneMission[]

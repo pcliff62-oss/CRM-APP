@@ -254,7 +254,7 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
           <div className="text-neutral-600">Total Squares</div>
           <div className="font-semibold">{(Number(job?.squares)).toFixed ? Number(job.squares).toFixed(2) : (job?.squares ?? '—')}</div>
         </div>
-        <label className="block">Used Squares
+  <label className="block">Actual Sqaures Used
           <input
             type="number"
             step="0.1"

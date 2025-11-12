@@ -296,9 +296,29 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   .proposal-html table{ width: 100%; float: none !important; position: relative; z-index: 1; }
   .proposal-html img{ max-width: 100%; height: auto; }
 
-  /* Force price pills visible in View regardless of template CSS */
-  .proposal-html label.price-choice { display: inline-flex !important; align-items: center; gap: 6px; visibility: visible !important; }
-  .proposal-html label.price-choice > span { font-weight: 600; }
+  /* Force price checkboxes to render as pill containers */
+  .proposal-html label.price-choice {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    padding: 6px 12px !important;
+    border: 1px solid #93c5fd !important; /* blue-300 */
+    border-radius: 9999px !important;
+    background: linear-gradient(180deg, #e0f2fe 0%, #bfdbfe 100%) !important; /* blue-100 to blue-200 */
+    color: #0f172a !important; /* keep text black */
+    visibility: visible !important;
+    box-shadow: 0 1px 0 rgba(29, 78, 216, 0.06) !important;
+    white-space: nowrap !important; /* keep full price on one line */
+    overflow: hidden !important; /* ensure decimals don't spill visually */
+  }
+  .proposal-html label.price-choice > span {
+    font-weight: 600 !important;
+    font-variant-numeric: tabular-nums !important;
+    white-space: nowrap !important; /* prevent breaking within price text */
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+  }
+  /* Checkbox inside pill */
   .proposal-html label.price-choice input.proposal-price-checkbox,
   .proposal-html input.proposal-price-checkbox {
     -webkit-appearance: checkbox !important;
@@ -306,12 +326,23 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     display: inline-block !important;
     width: 18px !important;
     height: 18px !important;
-    margin-left: 6px !important;
+    margin: 0 2px 0 2px !important; /* symmetric spacing regardless of order */
     opacity: 1 !important;
     visibility: visible !important;
     position: static !important;
     pointer-events: auto !important;
+    accent-color: #334155 !important; /* slate-700 */
   }
+  /* Hover/focus states */
+  .proposal-html label.price-choice:hover { border-color: #60a5fa !important; background: linear-gradient(180deg, #dbeafe 0%, #bfdbfe 100%) !important; }
+  .proposal-html label.price-choice:has(input.proposal-price-checkbox:focus-visible) { outline: 2px solid #3b82f6; outline-offset: 2px; }
+  /* Checked state: dark pill */
+  .proposal-html label.price-choice:has(input.proposal-price-checkbox:checked) {
+    background: linear-gradient(180deg, #bfdbfe 0%, #93c5fd 100%) !important; /* darker gradient */
+    color: #0f172a !important; /* keep text black on checked too */
+    border-color: #60a5fa !important;
+  }
+  .proposal-html label.price-choice:has(input.proposal-price-checkbox:checked) > span { color: #0f172a !important; }
 
   /* Windows & Doors table: avoid thick collapsed borders when many cells are empty */
   .windows-doors-table{ border-collapse: separate !important; border-spacing: 0; }
@@ -1452,137 +1483,138 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           .forEach(el => (el as HTMLElement).remove());
       }
 
-      // Insert or reuse a numeric-only span after the first '$' (if a total row exists)
+      // Insert or reuse a currency span inline with the "TOTAL INVESTMENT:" label (prefer reusing template-styled span)
       let totalSpan: HTMLElement | null = null;
       if (totalRow) {
         const ensureSpan = (): HTMLElement => {
-          let span = totalRow!.querySelector('.trim-total-amount') as HTMLElement | null;
-          if (span) return span;
-
+          // Choose the label cell (the one containing TOTAL INVESTMENT:)
           const cells = Array.from(totalRow!.querySelectorAll('td,th')) as HTMLElement[];
-          const cell = cells.length ? (cells[cells.length - 1] || cells[0]) : (totalRow! as HTMLElement);
-          // Mark this cell as the Trim total container so global wrappers skip it
+          const labelCell = cells.find(c => /TOTAL\s+INVESTMENT\s*:/i.test(c.textContent || '')) || null;
+          const cell = labelCell || (cells.length ? (cells[cells.length - 1] || cells[0]) : (totalRow! as HTMLElement));
           try { (cell as HTMLElement).setAttribute('data-trim-total', '1'); } catch {}
-          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
-          let tgt: Text | null = null; let idx = -1;
-          while (walker.nextNode()) {
-            const tn = walker.currentNode as Text;
-            const t = tn.textContent || '';
-            const i = t.indexOf('$');
-            if (i >= 0) { tgt = tn; idx = i; break; }
+          // Remove any previously injected standalone dollar spans in the entire row
+          Array.from(totalRow!.querySelectorAll('.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
+          // Try to reuse an existing currency span from anywhere in the row (keeps Times New Roman styles)
+          const currRe = /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/;
+          let span = totalRow!.querySelector('.trim-total-amount') as HTMLElement | null;
+          if (!span) {
+            const rowSpans = Array.from(totalRow!.querySelectorAll('span')) as HTMLSpanElement[];
+            const existing = rowSpans.find(s => currRe.test(s.textContent || '')) || null;
+            if (existing) {
+              existing.classList.add('trim-total-amount');
+              span = existing as unknown as HTMLElement;
+            }
           }
-          span = document.createElement('span');
-          span.className = 'trim-total-amount';
-          span.textContent = fmt(0).replace(/^\s*\$\s*/, '');
-          if (tgt && idx >= 0) {
-            const text = tgt.textContent || '';
-            const before = text.slice(0, idx + 1);
-            const after = text.slice(idx + 1).replace(/^[ _\u00A0]+/, ' ');
-            const parent = tgt.parentNode as Node;
-            parent.insertBefore(document.createTextNode(before), tgt);
-            parent.insertBefore(span, tgt);
-            parent.insertBefore(document.createTextNode(after), tgt);
-            parent.removeChild(tgt);
-          } else {
+          // If we found an existing styled span in a different cell, move it inline after the label
+          if (span && span.parentElement && span.closest('td,th') !== cell) {
+            try {
+              // Insert inline after the label text inside the label cell
+              let inserted = false;
+              const labelRe = /TOTAL\s+INVESTMENT\s*:?/i;
+              const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const tn = walker.currentNode as Text;
+                const text = tn.textContent || '';
+                const m = text.match(labelRe);
+                if (!m) continue;
+                const end = text.search(labelRe) + m[0].length;
+                const before = text.slice(0, end);
+                const after = text.slice(end).replace(/^\s+/, ' ');
+                const frag = document.createDocumentFragment();
+                frag.appendChild(document.createTextNode(before + ' '));
+                frag.appendChild(span);
+                if (after) frag.appendChild(document.createTextNode(after));
+                (tn.parentNode as Node).replaceChild(frag, tn);
+                inserted = true;
+                break;
+              }
+              if (!inserted) cell.appendChild(span);
+            } catch {}
+          }
+          // If still no span, create a new one and place after the label in the label cell
+          if (!span) {
+            span = document.createElement('span');
+            span.className = 'trim-total-amount';
+            span.textContent = fmt(0);
+          }
+
+          // Preferred: insert right after the TOTAL INVESTMENT label
+          let inserted = false;
+          try {
+            const labelRe = /TOTAL\s+INVESTMENT\s*:?/i;
+            const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const tn = walker.currentNode as Text;
+              const text = tn.textContent || '';
+              const m = text.match(labelRe);
+              if (!m) continue;
+              const end = text.search(labelRe) + m[0].length;
+              const before = text.slice(0, end);
+              const after = text.slice(end).replace(/^\s+/, ' ');
+              const frag = document.createDocumentFragment();
+              frag.appendChild(document.createTextNode(before + ' '));
+              frag.appendChild(span);
+              if (after) frag.appendChild(document.createTextNode(after));
+              (tn.parentNode as Node).replaceChild(frag, tn);
+              inserted = true;
+              break;
+            }
+          } catch {}
+
+          if (!inserted) {
+            // Fallback: find first '$' in the cell, strip it, and insert our own markers
+            const walker2 = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+            let target: Text | null = null; let idx = -1;
+            while (walker2.nextNode()) {
+              const tn = walker2.currentNode as Text;
+              const t = tn.textContent || '';
+              const i = t.indexOf('$');
+              if (i >= 0) { target = tn; idx = i; break; }
+            }
+            if (target && idx >= 0) {
+              const text = target.textContent || '';
+              const before = text.slice(0, Math.max(0, idx));
+              const after = text.slice(idx + 1).replace(/^[ _\u00A0]+/, ' ');
+              const parent = target.parentNode as Node;
+              const frag = document.createDocumentFragment();
+              if (before) frag.appendChild(document.createTextNode(before));
+              frag.appendChild(span);
+              if (after) frag.appendChild(document.createTextNode(after));
+              parent.replaceChild(frag, target);
+              inserted = true;
+            }
+          }
+
+          if (!inserted) {
+            // Last resort: append to the end of the cell
             cell.appendChild(span);
           }
-          // After inserting the numeric-only span, remove any duplicate money tokens or placeholder runs that may follow
+
+          // Cleanup: remove any other $ or $amounts in the row; leave only the inline span in label cell
           try {
-            // Only operate within the total container cell
-            const host = span.closest('[data-trim-total="1"]') as HTMLElement | null;
-            if (host) {
-              // Normalize to exactly one '$ ' immediately before the span
-              try {
-                // Helper: find the last non-space/underscore char before the span across sibling elements
-                const lastNonSpaceCharBefore = (node: Node | null): string | null => {
-                  const isWhitespace = (ch: string) => /[\s\u00A0_]/.test(ch);
-                  let cur: Node | null = node ? node.previousSibling : null;
-                  let steps = 0;
-                  while (cur && steps++ < 24) {
-                    if (cur.nodeType === Node.TEXT_NODE) {
-                      const t = (cur as Text).textContent || '';
-                      for (let i = t.length - 1; i >= 0; i--) {
-                        const ch = t[i];
-                        if (!isWhitespace(ch)) return ch;
-                      }
-                    } else if (cur.nodeType === Node.ELEMENT_NODE) {
-                      const el = cur as HTMLElement;
-                      // Dive into its last texty descendant
-                      let d: Node | null = el.lastChild;
-                      let innerSteps = 0;
-                      while (d && innerSteps++ < 24) {
-                        if (d.nodeType === Node.TEXT_NODE) {
-                          const t = (d as Text).textContent || '';
-                          for (let i = t.length - 1; i >= 0; i--) {
-                            const ch = t[i];
-                            if (!isWhitespace(ch)) return ch;
-                          }
-                          break;
-                        }
-                        d = (d as any).lastChild || null;
-                      }
-                    }
-                    cur = cur.previousSibling;
-                  }
-                  return null;
-                };
-                const lastCh = lastNonSpaceCharBefore(span);
-                const hasDollarBefore = lastCh === '$';
-                if (hasDollarBefore) {
-                  // If there's already a $ before, remove a redundant "$ " text node immediately before span
-                  const prev = span.previousSibling;
-                  if (prev && prev.nodeType === Node.TEXT_NODE) {
-                    const s = ((prev as Text).textContent || '');
-                    if (/^\s*\$\s*$/.test(s)) {
-                      const rm = prev; span.parentNode?.removeChild(rm);
-                    } else {
-                      // Ensure exactly one space between the existing $ and the span
-                      // Trim trailing whitespace and add a single space
-                      const trimmed = s.replace(/[\s\u00A0_]+$/g, '');
-                      (prev as Text).textContent = trimmed + ' ';
-                    }
-                  } else {
-                    // No text node directly before: insert a single space for readability
-                    span.parentNode?.insertBefore(document.createTextNode(' '), span);
-                  }
-                } else {
-                  // No $ found before span: insert one
-                  span.parentNode?.insertBefore(document.createTextNode('$ '), span);
-                }
-              } catch {}
-              // Walk siblings after the span and strip any "$123" or standalone numeric tokens and placeholder underscores/nbsp
-              let sib: Node | null = span.nextSibling;
-              let steps = 0;
-              const moneyRe = /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/;
-              const numberOnlyRe = /(^|>)\s*[0-9][0-9,]*(?:\.[0-9]{2})?(?=\s*(<|$))/;
-              while (sib && steps++ < 24) {
-                if (sib.nodeType === Node.TEXT_NODE) {
-                  let s = (sib as Text).textContent || '';
-                  const s0 = s;
-                  // Remove any $money immediately
-                  s = s.replace(new RegExp(moneyRe, 'g'), '');
-                  // Remove any leading numeric token
-                  s = s.replace(/^[\s\u00A0]*[0-9][0-9,]*(?:\.[0-9]{2})?/, '');
-                  // Collapse placeholders
-                  s = s.replace(/[ _\u00A0]{2,}/g, ' ');
-                  if (s.trim() === '') { const rm = sib; sib = sib.nextSibling; (rm.parentNode as Node | null)?.removeChild(rm); continue; }
-                  if (s !== s0) (sib as Text).textContent = s;
-                } else if (sib.nodeType === Node.ELEMENT_NODE) {
-                  const el = sib as HTMLElement;
-                  const html0 = el.innerHTML;
-                  let html1 = html0;
-                  html1 = html1.replace(new RegExp(moneyRe.source, 'g'), '');
-                  html1 = html1.replace(numberOnlyRe, '$1');
-                  html1 = html1.replace(/[ _\u00A0]{2,}_*/g, ' ');
-                  if (html1 !== html0) el.innerHTML = html1;
-                  // Remove if empty/placeholder-only after cleanup
-                  const plain = (el.textContent || '').replace(/[_\s\u00A0]+/g, ' ').trim();
-                  if (!plain) { const rm = el; sib = el.nextSibling; rm.remove(); continue; }
-                }
-                sib = sib.nextSibling;
+            // Clean all cells in the row except the label cell where our span lives
+            for (const c of cells) {
+              if (c === cell) continue;
+              // Remove currency spans and $ tokens
+              Array.from(c.querySelectorAll('.trim-total-amount,.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
+              const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT);
+              const edits: Text[] = [];
+              while (walker.nextNode()) {
+                const tn = walker.currentNode as Text;
+                const s0 = tn.textContent || '';
+                const s1 = s0.replace(/\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g, '').replace(/\$/g, '');
+                if (s1 !== s0) { tn.textContent = s1; edits.push(tn); }
+              }
+              // Remove empty elements left behind
+              const els = Array.from(c.querySelectorAll('*')) as HTMLElement[];
+              for (const el of els) {
+                if (el.querySelector('.trim-total-amount')) continue;
+                const text = (el.textContent || '').replace(/[\s\u00A0_]+/g, '').trim();
+                if (!text && !el.querySelector('img,table,video')) el.remove();
               }
             }
           } catch {}
+
           return span;
         };
         totalSpan = ensureSpan();
@@ -1605,50 +1637,15 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           const tr = ((snapshot as any)?.pricing?.trim || {}) as any;
           const feet = ((tr?.feet || {}) as any);
           const rates = ((tr?.rates || {}) as any);
-          // Determine base $/ft and adjust by install mode (new = discount)
-          const baseRate = Number(tr?.material === 'cedar' ? (rates?.cedar ?? rates?.perFt ?? rates?.perLF) : (rates?.azek ?? rates?.perFt ?? rates?.perLF)) || 0;
-          const adjRate = baseRate - (tr?.installMode === 'new' ? 2 : 0);
-          let effectivePerFt = adjRate;
-          // Fallback: detect visible per-foot rate in the Trim section (e.g., "$12.50 /ft" or "$12.50 per LF")
-          if (!(effectivePerFt > 0)) {
-            const scanText = (sectionHost as HTMLElement).textContent || '';
-            const pf = scanText.match(/\$\s*([0-9]+(?:\.[0-9]{2})?)\s*(?:\/\s*(?:ft|lf)|per\s*(?:linear\s*)?(?:ft|lf)\b)/i);
-            if (pf) {
-              const v = Number(pf[1]);
-              if (isFinite(v) && v > 0) effectivePerFt = v;
-            }
-          }
-          // Secondary fallback: derive $/ft from any existing row that already shows a $ amount and a Feet value
-          if (!(effectivePerFt > 0) && (sectionHost as HTMLElement).matches?.('table')) {
-            const rows = Array.from((sectionHost as HTMLElement).querySelectorAll('tr')) as HTMLTableRowElement[];
-            const perFt: number[] = [];
-            const feetRx = /([0-9]+(?:\.[0-9]+)?)\s*(?:Feet|Ft\.?|LF|Linear\s+Feet)\b/i;
-            for (const r of rows) {
-              const cells = Array.from(r.querySelectorAll('td,th')) as HTMLElement[];
-              if (!cells.length) continue;
-              let ft = 0;
-              let amt = 0;
-              for (const c of cells) {
-                if (!ft) {
-                  const m = (c.textContent || '').match(feetRx);
-                  if (m) { const v = Number(m[1]); if (isFinite(v) && v > 0) ft = v; }
-                }
-                if (!amt) {
-                  const a = parseMoney(c.textContent || '');
-                  if (a > 0) amt = a;
-                }
-              }
-              if (ft > 0 && amt > 0) {
-                const rate = amt / ft;
-                if (isFinite(rate) && rate > 0) perFt.push(rate);
-              }
-            }
-            if (perFt.length) {
-              perFt.sort((a,b)=>a-b);
-              const mid = Math.floor(perFt.length/2);
-              effectivePerFt = perFt.length % 2 ? perFt[mid] : (perFt[mid-1] + perFt[mid]) / 2;
-            }
-          }
+          // Source of truth: embedded app's "Effective $/ft" from snapshot.computed
+          let effectivePerFt = ((): number => {
+            const fromSnap = Number(((snapshot as any)?.computed?.trimEffectivePerFt) || 0);
+            if (isFinite(fromSnap) && fromSnap > 0) return fromSnap;
+            // Minimal local fallback: compute from pricing.trim the same way the app does
+            const base = Number(tr?.material === 'cedar' ? (rates?.cedar ?? rates?.perFt ?? rates?.perLF) : (rates?.azek ?? rates?.perFt ?? rates?.perLF)) || 0;
+            const adj = base - (tr?.installMode === 'new' ? 2 : 0);
+            return isFinite(adj) && adj > 0 ? adj : 0;
+          })();
           type TrimItem = { key: string; labelRe: RegExp; feet: number };
           const items: TrimItem[] = [
             { key: 'soffit',       labelRe: /\bSoffits?\b/i,             feet: Number(feet?.soffit || feet?.soffits || 0) },
@@ -1759,7 +1756,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             return input;
           };
           for (const it of items) {
-            const amt = Math.max(0, Math.round((Number(it.feet || 0) * adjRate) * 100) / 100);
+            const amt = Math.max(0, Math.round((Number(it.feet || 0) * effectivePerFt) * 100) / 100);
             attach(it.labelRe, amt, it.feet);
           }
         } catch {}
@@ -1803,11 +1800,13 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         const scope = sectionHost as HTMLElement;
         const cbs = Array.from(scope.querySelectorAll('input.proposal-price-checkbox')) as HTMLInputElement[];
         const subtotal = cbs.reduce((a, cb) => a + (cb.checked ? Number(cb.getAttribute('data-amount') || '0') : 0), 0);
-        if (totalSpan) totalSpan.textContent = fmt(subtotal).replace(/^\s*\$\s*/, '');
+        if (totalSpan) totalSpan.textContent = fmt(subtotal);
         // Safety: ensure no pills exist inside the Trim total container, even if other passes re-injected
         const totalContainer = (scope.querySelector('[data-trim-total="1"]') as HTMLElement | null) || (totalSpan?.closest('td,th') as HTMLElement | null) || null;
         if (totalContainer) {
           Array.from(totalContainer.querySelectorAll('label.price-choice,input.proposal-price-checkbox')).forEach(el => (el as HTMLElement).remove());
+          // Also ensure any stray .trim-total-dollar remnants are removed
+          Array.from(totalContainer.querySelectorAll('.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
         }
         recalc();
       };
@@ -2603,6 +2602,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     }
 
     // Synthetic siding and other siding sections: ensure TOTAL row renders a pill+checkbox
+    // and center the pill with the "TOTAL INVESTMENT:" text preceding it.
     (function setupSidingTotal(){
       try {
         const tables = Array.from(root.querySelectorAll('table[data-section^="siding:"]')) as HTMLElement[];
@@ -2613,6 +2613,8 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           if (!rows.length) continue;
           const totalRow = rows.find(r => totalRe.test(r.textContent || '')) || null;
           if (!totalRow) continue;
+          // Idempotency: if we've already centered this row, skip
+          if ((totalRow as HTMLElement).getAttribute('data-siding-centered') === '1') continue;
           const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
           if (!cells.length) continue;
           let amountCell: HTMLElement | null = null;
@@ -2625,20 +2627,45 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           if (!amountCell) continue;
           const amt = parseMoney(amountCell.textContent || '');
           if (!(amt > 0)) continue;
-          try { amountCell.setAttribute('data-siding-total', '1'); } catch {}
-          Array.from(amountCell.querySelectorAll('label.price-choice,input.proposal-price-checkbox')).forEach(el => (el as HTMLElement).remove());
-          const label = document.createElement('label');
-          label.className = 'price-choice';
+          // Build the pill
+          const pill = document.createElement('label');
+          pill.className = 'price-choice';
           const span = document.createElement('span');
           span.textContent = fmt(amt);
           const input = document.createElement('input');
           input.type = 'checkbox';
           input.className = 'proposal-price-checkbox';
           input.setAttribute('data-amount', String(amt));
-          label.appendChild(span);
-          label.appendChild(input);
-          amountCell.innerHTML = '';
-          amountCell.appendChild(label);
+          pill.appendChild(span);
+          pill.appendChild(input);
+
+          // Compute total columns for centering (max colSpan sum across first few rows)
+          let totalCols = 0;
+          for (const r of rows.slice(0, 12)) {
+            const cs = Array.from(r.querySelectorAll('td,th')) as HTMLTableCellElement[];
+            const sum = cs.reduce((s, c) => s + (Number(c.colSpan) || 1), 0);
+            if (sum > totalCols) totalCols = sum;
+          }
+          if (!totalCols) totalCols = cells.length || 1;
+
+          // Replace the total row content with a single centered cell: "TOTAL INVESTMENT:" then pill
+          const td = document.createElement('td');
+          try { td.colSpan = totalCols; } catch {}
+          td.style.textAlign = 'center';
+          // Label text before pill
+          const lbl = document.createElement('span');
+          lbl.textContent = 'TOTAL INVESTMENT:';
+          // Make the label bold and noticeably larger than surrounding text
+          lbl.style.fontWeight = '700';
+          lbl.style.fontSize = '1.25em';
+          // Clear original totalRow and insert our centered cell
+          while (totalRow.firstChild) totalRow.removeChild(totalRow.firstChild);
+          totalRow.appendChild(td);
+          // Append label then a space then the pill
+          td.appendChild(lbl);
+          td.appendChild(document.createTextNode(' '));
+          td.appendChild(pill);
+          try { (totalRow as HTMLElement).setAttribute('data-siding-centered', '1'); } catch {}
         }
       } catch {}
     })();
@@ -3529,6 +3556,59 @@ export default function ProposalView({ params }: { params: { id: string } }) {
               if (newHtml !== html2) { priceCell.innerHTML = newHtml; changed = true; }
             }
           }
+          // Heal case where decimals like ".00" live immediately after the pill; pull them into the pill span
+          try {
+            const pill = priceCell.querySelector('label.price-choice') as HTMLElement | null;
+            const span = pill ? (pill.querySelector('span') as HTMLElement | null) : null;
+            if (pill && span) {
+              const hasDecimals = /\.[0-9]{2}\b/.test(span.textContent || '');
+              if (!hasDecimals) {
+                // Scan a few immediate siblings to find a leading ".xx" token to merge
+                let sib: Node | null = pill.nextSibling;
+                let steps = 0;
+                const takeFromText = (tn: Text) => {
+                  const s = tn.textContent || '';
+                  const m = s.match(/^\s*\.([0-9]{2})\b/);
+                  if (!m) return false;
+                  span.textContent = (span.textContent || '') + `.${m[1]}`;
+                  const rest = s.slice(m[0].length);
+                  if (rest.trim()) tn.textContent = rest; else tn.parentNode?.removeChild(tn);
+                  return true;
+                };
+                const takeFromElem = (el: HTMLElement) => {
+                  // Only consider simple wrappers that begin with a decimal token
+                  const txt = (el.textContent || '').trim();
+                  const m = txt.match(/^\.([0-9]{2})\b/);
+                  if (!m) return false;
+                  span.textContent = (span.textContent || '') + `.${m[1]}`;
+                  // Remove the consumed part from the element; if empty, remove element
+                  const remaining = txt.slice(m[0].length).trim();
+                  if (remaining) {
+                    // Replace inner text preserving element but dropping consumed prefix
+                    // Safer to set textContent as this is a tiny formatting fragment
+                    el.textContent = remaining;
+                  } else {
+                    el.remove();
+                  }
+                  return true;
+                };
+                while (sib && steps++ < 3) {
+                  if (sib.nodeType === Node.TEXT_NODE) {
+                    if (takeFromText(sib as Text)) break;
+                  } else if (sib instanceof HTMLElement) {
+                    // Ignore placeholder underscores/nbsp; skip them
+                    const isPlaceholder = /^[_\s\u00A0]+$/.test((sib.textContent || ''));
+                    if (isPlaceholder) { sib = sib.nextSibling; continue; }
+                    if (takeFromElem(sib)) break;
+                  }
+                  // Stop merging if we hit another price pill or non-trivial content
+                  if (sib instanceof HTMLElement && sib.querySelector('label.price-choice')) break;
+                  // Advance
+                  sib = sib.nextSibling;
+                }
+              }
+            }
+          } catch {}
           return priceCell.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null;
         };
 
@@ -3546,6 +3626,36 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             const cb = row.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null;
             if (cb) cb.setAttribute('data-amount', String(lineTotal));
             if (cb && cb.checked) subtotal += lineTotal;
+            // Re-run decimal merge to ensure pill shows full amount if template split decimals
+            try {
+              const pill = priceCell?.querySelector('label.price-choice') as HTMLElement | null;
+              const span = pill ? (pill.querySelector('span') as HTMLElement | null) : null;
+              if (pill && span && !/\.[0-9]{2}\b/.test(span.textContent || '')) {
+                let sib: Node | null = pill.nextSibling; let steps = 0;
+                while (sib && steps++ < 3) {
+                  if (sib.nodeType === Node.TEXT_NODE) {
+                    const s = (sib as Text).textContent || '';
+                    const m = s.match(/^\s*\.([0-9]{2})\b/);
+                    if (m) {
+                      span.textContent = (span.textContent || '') + `.${m[1]}`;
+                      const rest = s.slice(m[0].length);
+                      if (rest.trim()) (sib as Text).textContent = rest; else sib.parentNode?.removeChild(sib);
+                      break;
+                    }
+                  } else if (sib instanceof HTMLElement) {
+                    const txt = (sib.textContent || '').trim();
+                    const m = txt.match(/^\.([0-9]{2})\b/);
+                    if (m) {
+                      span.textContent = (span.textContent || '') + `.${m[1]}`;
+                      const remaining = txt.slice(m[0].length).trim();
+                      if (remaining) sib.textContent = remaining; else sib.remove();
+                      break;
+                    }
+                  }
+                  sib = sib.nextSibling;
+                }
+              }
+            } catch {}
           }
           // Update all skylight total spans (inline label and any table total cell)
           const amtSpans = Array.from(rootEl.querySelectorAll('.skylight-total-amount')) as HTMLElement[];

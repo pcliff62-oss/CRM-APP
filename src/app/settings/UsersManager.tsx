@@ -38,7 +38,7 @@ export default function UsersManager() {
     // attach optional extras depending on role (persist later when API supports)
     if (form.role==='SALES' && form.commissionRate) payload.commissionRate = Number(form.commissionRate);
     if (form.role==='EMPLOYEE' && form.hourlyRate) payload.hourlyRate = Number(form.hourlyRate);
-    if (form.role==='CREW' && form.ratePerSquare) payload.ratePerSquare = Number(form.ratePerSquare);
+  if (form.role==='CREW' && form.ratePerSquare) payload.ratePerSquare = Number(form.ratePerSquare);
     if (form.role==='ADMIN' && form.managerBaseType && form.managerBaseValue) {
       payload.managerBaseType = form.managerBaseType;
       payload.managerBaseValue = Number(form.managerBaseValue);
@@ -60,7 +60,13 @@ export default function UsersManager() {
   };
 
   const deleteUser = async (id: string) => {
-    // Placeholder until DELETE route added; for now just UI remove
+    if (!confirm('Remove this user?')) return;
+    const r = await fetch(`/api/users/${encodeURIComponent(id)}`, { method:'DELETE' });
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok || j?.ok===false) {
+      alert(j?.error || `Failed to remove (HTTP ${r.status})`);
+      return;
+    }
     setUsers(prev => prev.filter(u => u.id !== id));
   };
 

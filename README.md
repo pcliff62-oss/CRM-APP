@@ -121,3 +121,30 @@ npm run dev
 ```
 
 The field app may also use `VITE_API_BASE` for calling a deployed API; set it in `.env.local` or `.env`.
+
+## Company Info Management
+
+Admins can now manage tenant-level company details under Settings > Company Info:
+
+- Name, phone, email
+- Address (lines 1 & 2, city, state, postal)
+- Logo upload (stored via existing `/api/upload` endpoint; path saved as `logoPath` on `Tenant`)
+- Licenses: dynamic list of `{ type, number, expires }` entries
+
+API:
+
+- `GET /api/company` returns `{ ok, item }`
+- `PUT /api/company` (ADMIN only) updates fields; validates email & phone formats
+
+Database additions (Prisma `Tenant` model): `phone`, `email`, `address1`, `address2`, `city`, `state`, `postal`, `logoPath`, `licensesJson`.
+
+Licenses are stored as JSON array in `licensesJson` and surfaced to the UI as editable rows.
+
+### Edit Mode & License Expiration
+
+- The Edit button only appears after initial data finishes loading to avoid editing stale placeholders.
+- Each license shows a status badge:
+  - `Expired` (red) when the expiration date is past.
+  - `Expiring (Nd)` (amber) when within 30 days.
+  - `Valid` (green) otherwise.
+- Badges update live as you change dates in edit mode.

@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
   try {
     const existing = await prisma.user.findFirst({ where: { email, tenantId } });
     if (existing) return NextResponse.json({ ok:false, error:'User exists' }, { status:400 });
-    const user = await prisma.user.create({ data: { email, name, role, tenantId } });
+  const user = await prisma.user.create({ data: { email, name, role, tenantId } });
     return NextResponse.json({ ok:true, item: { id: user.id, email: user.email, name: user.name, role: user.role } });
   } catch (e: any) {
     console.error('POST /api/users failed', e);

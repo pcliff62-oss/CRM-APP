@@ -2,6 +2,8 @@ import "./../styles/globals.css";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 import Link from "next/link";
+import prisma from '@/lib/db';
+import { getCurrentTenantId } from '@/lib/auth';
 import dynamic from 'next/dynamic';
 const GlobalNewLeadButton = dynamic(() => import('@/components/NewLead'), { ssr: false });
 
@@ -10,13 +12,26 @@ export const metadata = {
   description: "CRM + Measurements + Proposals"
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const tenantId = await getCurrentTenantId();
+  let logoPath: string | null = null;
+  if (tenantId) {
+    try {
+      const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+      logoPath = t?.logoPath || null;
+    } catch {}
+  }
   return (
     <html lang="en">
       <body>
         <div className="min-h-screen flex">
           <aside className="w-64 bg-slate-900 text-slate-100">
-            <div className="p-5 text-xl font-semibold">HyTech CRM</div>
+            <div className="p-5 text-xl font-semibold flex flex-col items-start gap-3">
+              {logoPath ? (
+                <img src={logoPath} alt="Company Logo" className="h-12 w-auto object-contain" />
+              ) : null}
+              <div>HyTech CRM</div>
+            </div>
             <nav className="px-3 space-y-1">
               <NavLink href="/">Dashboard</NavLink>
               <NavLink href="/leads">Pipeline</NavLink>

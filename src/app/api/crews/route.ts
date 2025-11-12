@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
     name: u.name || u.email,
     ratePerSquare: Number((u as any).ratePerSquare || 0) || 0,
     members: [{ id: u.id, name: u.name || u.email }],
+    docs: (Array.isArray((u as any).docs)? (u as any).docs: []),
     tenantId: u.tenantId,
     source: 'user',
   }))
