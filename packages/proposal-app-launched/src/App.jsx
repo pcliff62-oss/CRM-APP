@@ -2596,6 +2596,14 @@ Object.assign(data, {
     return round2(num(rate) * feet);
   }, [pricing.trim]);
 
+  // Effective $/ft for Trim, matching the UI "Effective $/ft" line
+  const trimEffectivePerFt = useMemo(() => {
+    const raw = pricing.trim.material === "cedar" ? pricing.trim.rates.cedar : pricing.trim.rates.azek;
+    const rate = num(raw) - (pricing.trim.installMode === "new" ? 2 : 0);
+    // Keep two decimals for clarity and match currency formatting without symbol
+    return round2(num(rate));
+  }, [pricing.trim.material, pricing.trim.rates, pricing.trim.installMode]);
+
   const guttersTotal = useMemo(() => {
     if (!pricing.gutters.selected) return 0;
     let effRate = num(pricing.gutters.rates[pricing.gutters.type]);
@@ -2664,7 +2672,7 @@ Object.assign(data, {
         workDomain,
         selectedWork,
         photos,
-        computed: { primaryTotals, extrasTotal, grandTotal },
+  computed: { primaryTotals, extrasTotal, grandTotal, trimEffectivePerFt },
         leadId: (new URLSearchParams(window.location.search)).get('lead') || null,
       });
     } catch {}
@@ -4848,6 +4856,8 @@ function Header({ company, grandTotal, onPrint, auth, onLogout }) {
               if (creating) return;
               setCreating(true);
               try {
+                // Pre-open a blank tab synchronously to avoid popup blockers
+                const preopened = (typeof window !== 'undefined') ? window.open('', '_blank') : null;
                 const snapFn = (typeof window !== 'undefined' && window.__hytech_snapshot) ? window.__hytech_snapshot : null;
                 let snapshot = snapFn ? snapFn() : null;
                 if (!snapshot) {
@@ -4865,8 +4875,17 @@ function Header({ company, grandTotal, onPrint, auth, onLogout }) {
                 });
                 if (!res.ok) throw new Error(await res.text());
                 const data = await res.json();
-                try { await (navigator.clipboard && navigator.clipboard.writeText(data.signUrl)); } catch {}
-                alert(`Smart Doc ready.\n\n${data.signUrl}\n\n(The link was copied to your clipboard.)`);
+                // Navigate the pre-opened tab to the Smart Doc; if blocked, attempt a normal open
+                if (preopened) {
+                  try { preopened.location.href = data.signUrl; preopened.focus && preopened.focus(); } catch {}
+                } else {
+                  const opened = window.open(data.signUrl, '_blank');
+                  if (!opened) {
+                    // Fallback: copy to clipboard and notify user with the URL
+                    try { await (navigator.clipboard && navigator.clipboard.writeText(data.signUrl)); } catch {}
+                    alert(`Smart Doc ready but your browser blocked opening a new tab.\n\nPlease open this link: ${data.signUrl}`);
+                  }
+                }
               } catch (e) {
                 alert('Failed to create Smart Doc');
               } finally {

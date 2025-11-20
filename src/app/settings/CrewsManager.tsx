@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useMemo, useState } from 'react'
 
-type Crew = { id: string; name: string; ratePerSquare?: number; members?: { id: string; name: string }[] }
+type Crew = { id: string; name: string; ratePerSquare?: number; members?: { id: string; name: string }[]; docs?: { type: string; path: string; name?: string }[]; source?: 'user'|'crew' }
 
 async function listCrews(): Promise<Crew[]> {
   return fetch('/api/crews')
@@ -73,8 +73,8 @@ export default function CrewsManager() {
           <thead className="bg-slate-50 text-slate-600">
             <tr>
               <th className="text-left px-3 py-2">Name</th>
-              <th className="text-left px-3 py-2">Rate / sq</th>
               <th className="text-left px-3 py-2">Members</th>
+              <th className="text-left px-3 py-2">Documents</th>
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
@@ -82,11 +82,15 @@ export default function CrewsManager() {
       {filtered.filter(Boolean).map(c => (
               <tr key={c.id} className="border-t">
                 <td className="px-3 py-2">{c.name}</td>
-                <td className="px-3 py-2">{isFinite(Number(c.ratePerSquare))? `$${Number(c.ratePerSquare).toFixed(2)}`:'—'}</td>
-        <td className="px-3 py-2">{(c.members||[]).filter(Boolean).map(m=>m.name).join(', ')}</td>
+  <td className="px-3 py-2">{(c.members||[]).filter(Boolean).map(m=>m.name).join(', ')}</td>
+                <td className="px-3 py-2">
+                  <DocsList crew={c} />
+                </td>
                 <td className="px-3 py-2 text-right">
-                  <button className="text-blue-600 mr-3" onClick={()=>setEditing(c)}>Edit</button>
-                  <button className="text-rose-600" onClick={()=>onDelete(c.id)}>Delete</button>
+                  {c.source!=='user' && <>
+                    <button className="text-blue-600 mr-3" onClick={()=>setEditing(c)}>Edit</button>
+                    <button className="text-rose-600" onClick={()=>onDelete(c.id)}>Delete</button>
+                  </>}
                 </td>
               </tr>
             ))}
@@ -143,6 +147,39 @@ function MemberEditor({ value, onChange }: { value: { id: string; name: string }
           </li>
         ))}
         {(!value || value.length===0) && <li className="px-3 py-2 text-sm text-slate-500">No members</li>}
+      </ul>
+    </div>
+  )
+}
+
+function DocsList({ crew }: { crew: Crew }){
+  const [docs, setDocs] = useState(crew.docs||[])
+  async function upload(type: string, f?: File){
+    const file = f || (document.getElementById(`up-${crew.id}-${type}`) as HTMLInputElement | null)?.files?.[0]
+    if (!file) return
+    const fd = new FormData(); fd.append('file', file); fd.append('type', type)
+    const r = await fetch(`/api/crews/${encodeURIComponent(crew.id)}/docs`, { method:'POST', body: fd })
+    const j = await r.json().catch(()=>({})) as any
+    if (!r.ok || j?.ok===false) { alert(j?.error||'Upload failed'); return }
+    setDocs(prev => [{ type: j.item?.type||type, path: j.item?.path, name: j.item?.name||file.name }, ...prev])
+  }
+  const types = ['workers_comp','liability','w9','other']
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-2 items-center">
+        {types.map(t => (
+          <label key={t} className="inline-flex items-center gap-2 text-xs">
+            <span className="px-2 py-1 rounded bg-slate-100 border">{t.replace('_','-')}</span>
+            <input id={`up-${crew.id}-${t}`} type="file" className="hidden" onChange={e=> e.target.files && upload(t, e.target.files[0])} />
+            <button className="px-2 py-1 rounded bg-slate-800 text-white" onClick={()=> (document.getElementById(`up-${crew.id}-${t}`) as HTMLInputElement)?.click()}>Upload</button>
+          </label>
+        ))}
+      </div>
+      <ul className="text-xs space-y-1">
+        {(docs||[]).map((d,i)=> (
+          <li key={i}><a className="text-blue-700 underline" href={d.path} target="_blank" rel="noreferrer">{(d.type||'doc')}: {d.name||d.path}</a></li>
+        ))}
+        {(!docs || docs.length===0) && <li className="text-slate-500">No documents</li>}
       </ul>
     </div>
   )

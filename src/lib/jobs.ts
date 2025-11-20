@@ -138,62 +138,176 @@ async function nextAvailableStartDate(tenantId: string, days: number): Promise<D
   return nextMonday(today);
 }
 
+// New rule: schedule strictly after the last existing all-day job (lead or any job) for the tenant.
+// This ensures jobs never overlap or start during the span of an earlier job; they are sequential.
+async function nextStartAfterLastJob(tenantId: string): Promise<Date> {
+  const today = atStartOfDay(new Date());
+  // Find all future/present all-day appointments (jobs) to compute the max end
+  const existing = await prisma.appointment.findMany({
+    where: { tenantId, allDay: true, start: { gte: addDays(today, -30) } }, // small lookback to catch ongoing spans
+    select: { start: true, end: true },
+    orderBy: { start: 'asc' }
+  });
+  let latestEnd: Date | null = null;
+  for (const a of existing) {
+    const e = new Date(a.end);
+    if (!latestEnd || e > latestEnd) latestEnd = e;
+  }
+  const base = latestEnd && latestEnd > today ? latestEnd : today;
+  // Normalize and skip weekends
+  const start = normalizeJobStart(base);
+  return isWeekend(start) ? nextMonday(start) : start;
+}
+
 export async function scheduleJobForLead(leadId: string): Promise<{ created: boolean; apptId?: string; days?: number }>{
-  // Look up lead & tenant
-  const lead = await prisma.lead.findUnique({ where: { id: leadId }, include: { contact: { include: { leads: { include: { assignee: true }, orderBy: { createdAt: 'asc' } } } }, property: true, assignee: true } });
+  // 1. Load lead with minimal related data needed for assignment logic
+  const lead = await prisma.lead.findUnique({
+    where: { id: leadId },
+    include: {
+      contact: { include: { leads: { select: { id: true, assigneeId: true }, orderBy: { createdAt: 'asc' } } } },
+      property: true,
+      assignee: true
+    }
+  });
   if (!lead) return { created: false };
   const tenantId = lead.tenantId;
 
-  // Avoid duplicate job if an all-day install appointment already exists for this lead in the future
-  const existing = await prisma.appointment.findFirst({ where: { tenantId, leadId, allDay: true, start: { gte: new Date(Date.now() - 24*3600*1000) } } });
+  // 2. Duplicate prevention: any future (>= today) all-day appointment for this lead counts as existing job
+  const today = atStartOfDay(new Date());
+  const existing = await prisma.appointment.findFirst({
+    where: {
+      tenantId,
+      leadId: lead.id,
+      allDay: true,
+      start: { gte: today }
+    },
+    orderBy: { start: 'asc' }
+  });
   if (existing) return { created: false, apptId: existing.id };
 
-  // Determine squares and days
+  // 3. Determine squares and compute duration days; cache squares on appointment for downstream invoicing
   const squares = await findSquaresForLead(leadId);
   const days = daysFromSquares(squares ?? undefined);
 
-  // Compose title
-  const title = `JOB: ${lead.title || lead.contact?.name || 'Customer'}${squares ? ` – ${squares} sq` : ''}`;
-
-  const startDate = await nextAvailableStartDate(tenantId, days);
-  // FullCalendar all-day multi-day uses start at 00:00 and end exclusive (skip weekends)
+  // 4. Pick earliest slot
+  // Sequential scheduling: always place after last existing job, then apply weekday block length by simply counting forward business days.
+  const startDate = await nextStartAfterLastJob(tenantId);
   const start = normalizeJobStart(startDate);
   const end = addWeekdaysExclusive(start, days);
+  // Safety: ensure we got positive weekday count; if mismatch, bail
+  if (countWeekdays(start, end) < 1) return { created: false };
 
-  // Determine best assignee: this lead's assignee, else earliest lead's assignee for the contact
-  const fallbackAssigneeId = ((): string | null => {
-    const c = lead.contact as any;
+  // 5. Title & description
+  const title = `JOB: ${lead.title || lead.contact?.name || 'Customer'}${squares ? ` – ${squares} sq` : ''}`;
+  const description = lead.property ? `${lead.property.address1}, ${lead.property.city} ${lead.property.state} ${lead.property.postal}` : null;
+
+  // 6. Determine default assignee (lead.assigneeId else first contact lead with assignee)
+  const fallbackAssigneeId = (() => {
     if (lead.assigneeId) return lead.assigneeId;
-    if (c && Array.isArray(c.leads)) {
-      const firstWithAssignee = c.leads.find((l:any)=> !!l.assigneeId);
+    const c: any = lead.contact;
+    if (c?.leads?.length) {
+      const firstWithAssignee = c.leads.find((l: any) => !!l.assigneeId);
       return firstWithAssignee?.assigneeId || null;
     }
     return null;
   })();
 
+  // 7. Crew role detection (synchronous after fetch)
+  let crewId: string | null = null;
+  if (fallbackAssigneeId) {
+    try {
+      const crewUser = await prisma.user.findUnique({ where: { id: fallbackAssigneeId }, select: { role: true } });
+      if (crewUser?.role === 'CREW') crewId = fallbackAssigneeId;
+    } catch {/* ignore */}
+  }
+
+  // 8. Persist appointment
   const appt = await prisma.appointment.create({
     data: {
       tenantId,
       title,
-      description: lead.property ? `${lead.property.address1}, ${lead.property.city} ${lead.property.state} ${lead.property.postal}` : null,
+      description,
       start,
       end,
       allDay: true,
       leadId: lead.id,
-      // Assign to contact-level assignee as administrative default if present
       userId: fallbackAssigneeId,
-      // If the assignee is a crew member, also set crewId so crew-centric filters pick it up
-      crewId: (async () => {
-        if (!fallbackAssigneeId) return null;
-        try {
-          const crewUser = await prisma.user.findUnique({ where: { id: fallbackAssigneeId }, select: { role: true } });
-          return crewUser?.role === 'CREW' ? fallbackAssigneeId : null;
-        } catch { return null }
-      })() as any,
+      crewId,
+      squares: squares ?? undefined,
+      jobStatus: 'scheduled'
     }
   });
+  // Note: userId holds the SALES (lead assignee) for lifecycle ownership; crewId is set separately
+  // so that sales users continue to see the customer/job in their app while crews act on it.
 
   return { created: true, apptId: appt.id, days };
 }
 
 export default scheduleJobForLead;
+
+// Check if a lead already has an existing (past or future) all-day job appointment (any start date)
+export async function hasExistingJobAppointment(leadId: string): Promise<boolean> {
+  const appt = await prisma.appointment.findFirst({ where: { leadId, allDay: true } });
+  return !!appt;
+}
+
+// Ensure a job appointment exists for an APPROVED lead; if missing, schedule one.
+export async function ensureJobForApprovedLead(leadId: string): Promise<{ created: boolean; apptId?: string; days?: number }>{
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { stage: true } });
+  if (!lead || lead.stage !== 'APPROVED') return { created: false };
+  const exists = await hasExistingJobAppointment(leadId);
+  if (exists) return { created: false };
+  return scheduleJobForLead(leadId);
+}
+
+// Bulk helper to backfill jobs for a set of leads already in APPROVED stage.
+export async function backfillApprovedJobs(leadIds: string[]): Promise<{ processed: number; created: number }>{
+  let created = 0;
+  for (const id of leadIds) {
+    try {
+      const result = await ensureJobForApprovedLead(id);
+      if (result.created) created += 1;
+    } catch {/* ignore individual failures */}
+  }
+  return { processed: leadIds.length, created };
+}
+
+// Pricing aggregation for a lead: base approved contract price + any extras from:
+// 1) lead.extrasJson (sales-managed pre-job extras)
+// 2) latest job appointment extrasJson (crew-added extras during job)
+// Returns structured breakdown for UI.
+export async function pricingBreakdownForLead(leadId: string): Promise<{
+  contractPrice: number | null;
+  extras: { title?: string; price?: number; [k: string]: any }[];
+  extrasTotal: number;
+  grandTotal: number | null;
+  source: 'none' | 'lead' | 'appointment' | 'both';
+}> {
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { contractPrice: true, extrasJson: true, tenantId: true } });
+  if (!lead) return { contractPrice: null, extras: [], extrasTotal: 0, grandTotal: null, source: 'none' };
+  // Latest all-day job appointment (could have crew extras)
+  const appt = await prisma.appointment.findFirst({ where: { leadId, allDay: true }, orderBy: { start: 'desc' }, select: { extrasJson: true, id: true } });
+  const parse = (raw: string | null | undefined): any[] => {
+    if (!raw) return [];
+    try {
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v : [];
+    } catch { return []; }
+  };
+  const leadExtras = parse(lead.extrasJson).filter((x:any)=> x && typeof x === 'object');
+  const apptExtras = parse(appt?.extrasJson || null).filter((x:any)=> x && typeof x === 'object');
+  // Merge by simple concatenation; duplicates are allowed (distinct crew vs sales items)
+  const extras = [...leadExtras, ...apptExtras];
+  const extrasTotal = extras.reduce((sum:number,x:any)=> sum + (isFinite(Number(x.price)) ? Number(x.price) : 0), 0);
+  const contractPrice = typeof lead.contractPrice === 'number' && isFinite(lead.contractPrice) ? lead.contractPrice : null;
+  const grandTotal = contractPrice !== null ? contractPrice + extrasTotal : null;
+  const source: 'none' | 'lead' | 'appointment' | 'both' = (() => {
+    const hasLead = leadExtras.length > 0;
+    const hasAppt = apptExtras.length > 0;
+    if (hasLead && hasAppt) return 'both';
+    if (hasLead) return 'lead';
+    if (hasAppt) return 'appointment';
+    return 'none';
+  })();
+  return { contractPrice, extras, extrasTotal, grandTotal, source };
+}

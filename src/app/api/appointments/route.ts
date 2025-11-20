@@ -96,11 +96,7 @@ export async function POST(req: NextRequest) {
   const forceAllDay: boolean = !!data.allDay || /^JOB:\s*/i.test(titleStr) || !!data.job;
   // Keep a computed squares hint if we can infer it (used for create defaults)
   let computedSquares: number | null = null;
-  // If crewId maps to a user record, set userId accordingly (crew assignment binds user)
-  if (data.crewId) {
-    const crewUser = await prisma.user.findUnique({ where: { id: data.crewId } }).catch(()=>null);
-    if (crewUser) userId = crewUser.id;
-  }
+  // DO NOT override userId when a crew is assigned; sales owner remains userId for visibility persistence.
   let start = new Date(when);
   let end = data.end ? new Date(data.end) : new Date(when.getTime() + 60*60*1000);
   let allDay = false;
@@ -163,8 +159,12 @@ export async function POST(req: NextRequest) {
     if (Object.prototype.hasOwnProperty.call(data, 'title')) updateData.title = data.title;
     if (Object.prototype.hasOwnProperty.call(data, 'notes')) updateData.description = data.notes;
     if (Object.prototype.hasOwnProperty.call(data, 'customerId')) updateData.leadId = data.customerId;
-    if (Object.prototype.hasOwnProperty.call(data, 'assignedTo') || Object.prototype.hasOwnProperty.call(data, 'userId')) updateData.userId = userId;
-    if (Object.prototype.hasOwnProperty.call(data, 'crewId')) updateData.crewId = data.crewId;
+    if (Object.prototype.hasOwnProperty.call(data, 'assignedTo') || Object.prototype.hasOwnProperty.call(data, 'userId')) {
+      updateData.userId = userId;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'crewId')) {
+      updateData.crewId = data.crewId; // crew assignment separate from sales owner
+    }
     if (Object.prototype.hasOwnProperty.call(data, 'jobStatus')) updateData.jobStatus = data.jobStatus;
     if (Object.prototype.hasOwnProperty.call(data, 'materialOrdered')) updateData.materialOrdered = !!data.materialOrdered;
     if (Object.prototype.hasOwnProperty.call(data, 'squares')) updateData.squares = data.squares;
@@ -225,11 +225,7 @@ export async function PUT(req: NextRequest) {
     const u = await prisma.user.findUnique({ where: { email: data.assignedTo } }).catch(()=>null);
     if (u) userId = u.id;
   }
-  // crewId mapping to user for consistency: if crewId present, prefer mapping to userId
-  if (data.crewId) {
-    const crewUser = await prisma.user.findUnique({ where: { id: data.crewId } }).catch(()=>null);
-    if (crewUser) userId = crewUser.id;
-  }
+  // Preserve existing sales user; crewId does not take ownership
 
   // Prepare selective update object
   const patch: any = { tenantId };
@@ -240,9 +236,10 @@ export async function PUT(req: NextRequest) {
   if (Object.prototype.hasOwnProperty.call(data, 'customerId') || Object.prototype.hasOwnProperty.call(data, 'leadId')) {
     patch.leadId = data.customerId ?? data.leadId ?? null;
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'assignedTo') || Object.prototype.hasOwnProperty.call(data, 'userId') || Object.prototype.hasOwnProperty.call(data, 'crewId')) {
+  if (Object.prototype.hasOwnProperty.call(data, 'assignedTo') || Object.prototype.hasOwnProperty.call(data, 'userId')) {
     patch.userId = userId ?? current.userId;
   }
+  // crewId updated independently
   if (Object.prototype.hasOwnProperty.call(data, 'crewId')) patch.crewId = data.crewId || null;
   if (Object.prototype.hasOwnProperty.call(data, 'jobStatus')) patch.jobStatus = data.jobStatus || null;
   if (Object.prototype.hasOwnProperty.call(data, 'materialOrdered')) patch.materialOrdered = !!data.materialOrdered;

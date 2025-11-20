@@ -60,17 +60,15 @@ export default function JobsList({ items = [], onSelect, onBack }) {
               <div className="min-w-0">
                 <div className="font-medium truncate">
                   {(j.customerName || 'Job')}
-                  {` - ${cleanWorkType(j.workType, j.customerName)}`}
-                  {(() => { const s = extractSquares(j.title || ''); return s ? ` - ${s} sq` : '' })()}
+                  {(() => { const s = extractSquares(j.title || ''); return s ? ` • ${s} sq` : '' })()}
+                  {` — ${cleanWorkType(j.workType, j.customerName)}`}
                 </div>
                 <div className="text-xs text-neutral-500 truncate">
                   {new Date(j.when).toLocaleDateString()}
                   {` • ${computeJobDays(j.when, j.end, j.allDay ?? true)} day job`}
                   {j.address ? ` • ${j.address}` : ''}
                 </div>
-                <div className="text-xs text-neutral-500 truncate">
-                  {j.customerName || ''}{j.workType ? ` — ${j.workType}` : ''}
-                </div>
+                {/* Removed duplicate customer/workType line to avoid redundancy */}
               </div>
             </div>
           </li>

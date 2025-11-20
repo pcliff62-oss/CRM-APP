@@ -13,13 +13,13 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
     const n = Number(val)
     return Number.isFinite(n) ? n.toFixed(1) : ''
   })
-  // Rate tier selection (pricing per square). Default medium.
+  // Rate tier selection (pricing per square). Default easy.
   const RATE_TIERS = [
     { id: 'easy', label: 'Easy', rate: 130 },
     { id: 'medium', label: 'Medium', rate: 140 },
     { id: 'difficult', label: 'Difficult', rate: 150 },
   ]
-  const [rateTier, setRateTier] = useState('medium')
+  const [rateTier, setRateTier] = useState('easy')
   // Extras rows: { id, desc, price }
   const [extrasRows, setExtrasRows] = useState(() => {
     try {
@@ -109,6 +109,11 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
   }
 
   async function markComplete() {
+    // Confirm before submitting completion
+    if (typeof window !== 'undefined') {
+      const ok = window.confirm('Submit job completion and request payment?')
+      if (!ok) return
+    }
     try {
       setSubmitting(true)
       const squares = usedSquares !== '' ? Number(usedSquares) : (job?.squares != null ? Number(job.squares) : undefined)
@@ -136,7 +141,33 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
           completedAt: new Date().toISOString(),
         }
         // Fire and forget; Next API will persist centrally
-        fetch('/api/past-jobs', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload) }).catch(()=>{})
+        let pastJobId
+        try {
+          // Include attachmentsJson in past job record
+          const pjRes = await fetch('/api/past-jobs', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ ...payload, attachmentsJson: JSON.stringify(finalAttachments) }) })
+          const pjJson = await pjRes.json().catch(()=>({}))
+          if (pjJson?.ok && pjJson?.item?.id) pastJobId = pjJson.item.id
+        } catch {}
+        // Create crew payment request (fire and forget) with pastJobId
+        try {
+          const paymentReq = {
+            appointmentId: submitted.id,
+            pastJobId,
+            crewUserId: submitted.crewId || undefined,
+            amount: pricing?.grand || undefined,
+            rateTier: rateTier,
+            customerName: submitted.customerName || submitted.title || 'Job',
+            address: submitted.address || '',
+            usedSquares: pricing?.used,
+            ratePerSquare: pricing?.tier?.rate,
+            installTotal: pricing?.installTotal,
+            extrasTotal: pricing?.extrasTotal,
+            grandTotal: pricing?.grand,
+            extrasJson: JSON.stringify(extraItems),
+            attachmentsJson: JSON.stringify(finalAttachments)
+          }
+          fetch('/api/crew-payment-requests', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(paymentReq) }).catch(()=>{})
+        } catch {}
         // Move pipeline stage to COMPLETED when we have a lead id
         const leadId = payload.leadId
         if (leadId) {
@@ -254,7 +285,7 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
           <div className="text-neutral-600">Total Squares</div>
           <div className="font-semibold">{(Number(job?.squares)).toFixed ? Number(job.squares).toFixed(2) : (job?.squares ?? '—')}</div>
         </div>
-        <label className="block">Used Squares
+  <label className="block">Actual Sqaures Used
           <input
             type="number"
             step="0.1"

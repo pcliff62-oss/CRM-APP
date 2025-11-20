@@ -2152,25 +2152,55 @@ Object.assign(data, {
     ]
   );
 
+  const sidingTotals = useMemo(() => {
+    const totals = {};
+    if (!workDomain.siding || !selectedWork.sidingCategories || selectedWork.sidingCategories.length === 0) return totals;
+    const byCat = pricing.siding.byCategory || {};
+    const baseFallback = {
+      calcMode: pricing.siding.calcMode,
+      squares: pricing.siding.squares,
+      manualTotal: pricing.siding.manualTotal,
+      unit: pricing.siding.unit,
+      wovenCorners: pricing.siding.wovenCorners,
+    };
+    const rates = pricing.siding.rates || {};
+    const lookupUnit = (cat, src) => {
+      const direct = num(src?.unit);
+      if (direct) return direct;
+      const byCatRates = rates?.[cat] || {};
+      const product = src?.product || Object.keys(byCatRates)[0];
+      if (product && byCatRates && byCatRates[product] != null) return num(byCatRates[product]);
+      if (pricing.siding.unit != null) return num(pricing.siding.unit);
+      return 0;
+    };
+    selectedWork.sidingCategories.forEach((cat) => {
+      const src = { ...baseFallback, ...(byCat[cat] || {}) };
+      const stored = num(src.subtotal);
+      let subtotal = stored;
+      if (!(subtotal > 0)) {
+        const calcMode = (src.calcMode || "bySquare").toString();
+        if (calcMode === "manual") {
+          subtotal = num(src.manualTotal || 0);
+        } else {
+          const unit = lookupUnit(cat, src);
+          const squares = num(src.squares || pricing.siding.squares || pricing.siding.squareFootage || pricing.siding.wallSquares || pricing.siding.square || 0);
+          subtotal = round2(unit * squares);
+        }
+      }
+      const woven = src.wovenCorners || {};
+      if (woven.include) {
+        subtotal = round2(subtotal + 45 * num(woven.feet || 0));
+      }
+      totals[cat] = round2(subtotal);
+    });
+    return totals;
+  }, [workDomain.siding, selectedWork.sidingCategories, pricing.siding]);
+
   const sidingBase = useMemo(() => {
     if (!workDomain.siding || !selectedWork.sidingCategories || selectedWork.sidingCategories.length === 0) return 0;
-    const byCat = pricing.siding.byCategory || {};
-    let total = 0;
-    selectedWork.sidingCategories.forEach((cat) => {
-      const cp = byCat[cat] || { calcMode: pricing.siding.calcMode, squares: pricing.siding.squares, manualTotal: pricing.siding.manualTotal, unit: pricing.siding.unit, wovenCorners: { include: false, feet: 0 } };
-      if (cp.calcMode === "bySquare") {
-        const unit = cp.unit || unitRateFor({ category: cat, product: cp.product, rates: pricing.siding.rates });
-        total += round2(num(cp.squares || 0) * num(unit));
-      } else {
-        total += num(cp.manualTotal || 0);
-      }
-      // Add woven corners cost per-category (45/ft) if present
-      if (cp.wovenCorners && cp.wovenCorners.include) {
-        total += round2(45 * num(cp.wovenCorners.feet || 0));
-      }
-    });
+    const total = Object.values(sidingTotals).reduce((acc, value) => acc + num(value), 0);
     return round2(total);
-  }, [workDomain.siding, selectedWork.sidingCategories, pricing.siding]);
+  }, [workDomain.siding, selectedWork.sidingCategories, sidingTotals]);
 
   const plywoodRate = pricing.plywood.rateByMode[pricing.plywood.mode] || 0;
   const plywoodTotal = useMemo(() => computePlywoodTotal(pricing.plywood.squares, plywoodRate), [pricing.plywood.squares, plywoodRate]);
@@ -4214,7 +4244,7 @@ Object.assign(data, {
                 <TextInput label="Save as" value={savedName} onChange={setSavedName} placeholder="e.g., Smith_2025-08-18" />
                 <button className="px-4 py-2 rounded bg-slate-800 text-white self-end h-10" onClick={() => {
                   const key = savedName || `proposal_${new Date().toISOString()}`;
-                  const payload = { company, customer, measure, pricing, scope, workDomain, selectedWork, photos, computed: { primaryTotals, extrasTotal, grandTotal }, version: 9 };
+                  const payload = { company, customer, measure, pricing, scope, workDomain, selectedWork, photos, computed: { primaryTotals, extrasTotal, grandTotal, sidingTotals }, version: 9 };
                   setSavedMap({ ...savedMap, [key]: payload });
                   alert(`Saved as: ${key}`);
                 }}>Save</button>
@@ -4262,7 +4292,7 @@ Object.assign(data, {
             selectedWork={selectedWork}
             measure={measure}
             workDomain={workDomain}
-            totals={{ primaryTotals, extrasTotal, grandTotal }}
+            totals={{ primaryTotals, extrasTotal, grandTotal, sidingTotals }}
           />
         </PrintOverlay>
       )}

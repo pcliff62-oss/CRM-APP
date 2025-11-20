@@ -29,6 +29,7 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+secrets-*.tar.gz
 
 ## Prisma/SQLite local dev
 data.db
@@ -59,3 +60,7 @@ packages/**/.unzipped/
 
 ## Project artifacts
 tsconfig.tsbuildinfo
+
+## Handoff bundles (do not commit)
+.handoff/
+handoff-*.tar.gz

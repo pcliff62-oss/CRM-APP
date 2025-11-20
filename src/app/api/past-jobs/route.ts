@@ -32,6 +32,11 @@ export async function GET(req: NextRequest) {
   }
   const out = filtered.map((it: any) => {
     const extras = parseExtras(it.extrasJson || '[]')
+    let attachments: Array<{ id: string; name: string; url: string }> = []
+    try {
+      const arr = JSON.parse(it.attachmentsJson || '[]')
+      if (Array.isArray(arr)) attachments = arr.map((x: any, i: number) => ({ id: String(x?.id||`att-${i}`), name: String(x?.name||'file'), url: String(x?.url||x?.path||'') }))
+    } catch {}
     const extrasTotal = Number.isFinite(Number(it.extrasTotal)) ? Number(it.extrasTotal) : extras.reduce((s, x) => s + (Number(x.price) || 0), 0)
     const installTotal = Number.isFinite(Number(it.installTotal)) ? Number(it.installTotal) : ((Number(isFinite(Number(it.usedSquares)) ? it.usedSquares : it.squares) || 0) * (Number(it.ratePerSquare) || 0))
     const grandTotal = Number.isFinite(Number(it.grandTotal)) ? Number(it.grandTotal) : (installTotal + extrasTotal)
@@ -50,6 +55,7 @@ export async function GET(req: NextRequest) {
       extras,
       extrasTotal,
       grandTotal,
+  attachments,
       completedAt: it.completedAt,
     }
   })
@@ -62,7 +68,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const data: any = {}
-  const fields = ['leadId','appointmentId','crewUserId','customerName','address','extrasJson','rateTier']
+  const fields = ['leadId','appointmentId','crewUserId','customerName','address','extrasJson','attachmentsJson','rateTier']
     for (const k of fields) if (k in body) data[k] = body[k]
     if ('squares' in body) { const n = Number(body.squares); if (Number.isFinite(n)) data.squares = n }
   if ('usedSquares' in body) { const n = Number(body.usedSquares); if (Number.isFinite(n)) data.usedSquares = n }

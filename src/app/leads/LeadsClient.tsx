@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import StageSelector from '@/components/StageSelector';
 import { Button } from '@/components/ui/button';
@@ -17,6 +18,7 @@ interface Lead {
 }
 
 export default function LeadsClient({ leads }: { leads: Lead[] }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<Lead | null>(null);
   // advance-only flow; no pending save state
@@ -101,16 +103,21 @@ export default function LeadsClient({ leads }: { leads: Lead[] }) {
             >Advance Stage</button>
           )}
         </div>
-        {(selected.contactId || selected.contact?.id) && (
-          <div className="mb-4">
-            <a
-              href={`/customers/${selected.contactId || selected.contact?.id}`}
-              className="inline-flex items-center justify-center w-full h-11 rounded-md bg-sky-600 hover:bg-sky-700 text-white font-medium text-sm transition shadow"
-            >
-              Go to Contact
-            </a>
-          </div>
-        )}
+        {(() => {
+          const cid = selected.contactId || selected.contact?.id;
+          if (!cid) return null;
+          return (
+            <div className="mb-4">
+              <button
+                type="button"
+                onClick={() => { setOpen(false); router.push(`/customers/${cid}`); }}
+                className="inline-flex items-center justify-center w-full h-11 rounded-md bg-sky-600 hover:bg-sky-700 text-white font-medium text-sm transition shadow"
+              >
+                Go to Contact
+              </button>
+            </div>
+          );
+        })()}
         {selected.contractPrice ? (
           <div className="text-sm mb-2">Contract: <span className="font-medium">${selected.contractPrice.toLocaleString()}</span></div>
         ) : null}

@@ -10,6 +10,16 @@ datasource db {
 model Tenant {
   id                   String                @id @default(cuid())
   name                 String
+  // Company info fields
+  phone                String? // Company primary phone
+  email                String? // Company contact email
+  address1             String? // Street address line 1
+  address2             String? // Street address line 2
+  city                 String? // City
+  state                String? // State / Province
+  postal               String? // Postal / ZIP code
+  logoPath             String? // Uploaded logo file path
+  licensesJson         String? // JSON array of { type, number, expires }
   createdAt            DateTime              @default(now())
   appointments         Appointment[]
   contacts             Contact[]
@@ -27,6 +37,8 @@ model Tenant {
   appointmentAssignees AppointmentAssignee[]
   appointmentCrews     AppointmentCrew[]
   jobScopes            JobScope[]
+  crewPaymentRequests  CrewPaymentRequest[]
+  salesPaymentRequests SalesPaymentRequest[]
 }
 
 model User {
@@ -36,10 +48,17 @@ model User {
   role                 Role                  @default(EMPLOYEE)
   tenantId             String
   createdAt            DateTime              @default(now())
+  /// Sales commission percent (e.g., 5 for 5%)
+  commissionPercent    Float?
+  /// Sales base pay amount applied per selected period
+  basePayAmount        Float?
+  /// Period that base pay applies to (JOB | WEEK | MONTH)
+  basePayPeriod        BasePayPeriod?
   appointments         Appointment[]
   assignedLeads        Lead[]                @relation("LeadAssignee")
   tenant               Tenant                @relation(fields: [tenantId], references: [id])
   appointmentAssignees AppointmentAssignee[]
+  salesPaymentRequests SalesPaymentRequest[] @relation("UserSalesPaymentRequests")
 }
 
 enum Role {
@@ -47,6 +66,12 @@ enum Role {
   SALES
   CREW
   EMPLOYEE
+}
+
+enum BasePayPeriod {
+  JOB
+  WEEK
+  MONTH
 }
 
 model Property {
@@ -70,33 +95,37 @@ model Property {
 }
 
 model Lead {
-  id            String         @id @default(cuid())
-  tenantId      String
-  contactId     String?
-  propertyId    String?
-  title         String
-  stage         String         @default("LEAD")
-  source        String?
-  estimator     String?
-  probability   Int?
-  assigneeId    String?
-  category      String?
-  customScope   String?
-  notes         String?
-  contractPrice Float?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  appointments  Appointment[]  @relation("LeadAppointments")
-  droneMissions DroneMission[]
-  files         File[]
-  assignee      User?          @relation("LeadAssignee", fields: [assigneeId], references: [id])
-  property      Property?      @relation("PropertyLeads", fields: [propertyId], references: [id])
-  contact       Contact?       @relation("ContactLeads", fields: [contactId], references: [id])
-  tenant        Tenant         @relation(fields: [tenantId], references: [id])
-  measurements  Measurement[]  @relation("LeadMeasurements")
-  proposals     Proposal[]     @relation("LeadProposals")
-  solarInsights SolarInsight[]
-  pastJobs      PastJob[]
+  id                   String                @id @default(cuid())
+  tenantId             String
+  contactId            String?
+  propertyId           String?
+  title                String
+  stage                String                @default("LEAD")
+  source               String?
+  estimator            String?
+  probability          Int?
+  assigneeId           String?
+  category             String?
+  customScope          String?
+  notes                String?
+  contractPrice        Float?
+  extrasJson           String? // Sales-managed extras before/without crew job
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  appointments         Appointment[]         @relation("LeadAppointments")
+  droneMissions        DroneMission[]
+  files                File[]
+  assignee             User?                 @relation("LeadAssignee", fields: [assigneeId], references: [id])
+  solarInsights        SolarInsight[]
+  pastJobs             PastJob[]
+  tenant               Tenant                @relation(fields: [tenantId], references: [id])
+  property             Property?             @relation("PropertyLeads", fields: [propertyId], references: [id])
+  measurements         Measurement[]         @relation("LeadMeasurements")
+  proposals            Proposal[]            @relation("LeadProposals")
+  contact              Contact?              @relation("ContactLeads", fields: [contactId], references: [id])
+  salesPaymentRequests SalesPaymentRequest[]
+
+  @@index([tenantId, createdAt])
 }
 
 model Measurement {
@@ -165,7 +194,7 @@ model Contact {
   email         String?
   phone         String?
   organization  String?
-  flagColor     String?        // 'red' | 'yellow' | 'green'
+  flagColor     String? // 'red' | 'yellow' | 'green'
   createdAt     DateTime       @default(now())
   tenant        Tenant         @relation(fields: [tenantId], references: [id])
   droneMissions DroneMission[]
@@ -208,32 +237,33 @@ model MeasurementVersion {
 }
 
 model Appointment {
-  id              String                @id @default(cuid())
-  tenantId        String
-  title           String
-  description     String?
-  start           DateTime
-  end             DateTime
-  allDay          Boolean               @default(false)
-  leadId          String?
-  userId          String?
+  id                   String                @id @default(cuid())
+  tenantId             String
+  title                String
+  description          String?
+  start                DateTime
+  end                  DateTime
+  allDay               Boolean               @default(false)
+  leadId               String?
+  userId               String?
   // Job enhancement fields
-  crewId          String? // Assigned crew id
-  jobStatus       String?               @default("scheduled") // scheduled | in_progress | submitted | approved | completed
-  materialOrdered Boolean?              @default(false)
-  squares         Float? // Cached squares for duration/invoice
-  extrasJson      String? // JSON array of extras line items
-  attachmentsJson String? // JSON array of attachment refs
-  completedAt     DateTime? // When job card marked complete (crew submission)
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  user            User?                 @relation(fields: [userId], references: [id])
-  lead            Lead?                 @relation("LeadAppointments", fields: [leadId], references: [id])
-  tenant          Tenant                @relation(fields: [tenantId], references: [id])
+  crewId               String? // Assigned crew id
+  jobStatus            String?               @default("scheduled") // scheduled | in_progress | submitted | approved | completed
+  materialOrdered      Boolean?              @default(false)
+  squares              Float? // Cached squares for duration/invoice
+  extrasJson           String? // JSON array of extras line items
+  attachmentsJson      String? // JSON array of attachment refs
+  completedAt          DateTime? // When job card marked complete (crew submission)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  user                 User?                 @relation(fields: [userId], references: [id])
+  lead                 Lead?                 @relation("LeadAppointments", fields: [leadId], references: [id])
+  tenant               Tenant                @relation(fields: [tenantId], references: [id])
   // New relations
-  assignees       AppointmentAssignee[]
-  crews           AppointmentCrew[]
-  scopes          JobScope[]
+  assignees            AppointmentAssignee[]
+  crews                AppointmentCrew[]
+  scopes               JobScope[]
+  salesPaymentRequests SalesPaymentRequest[]
 }
 
 /// Planned drone scanning mission for a property (flight path metadata only – actual drone execution handled externally)
@@ -345,25 +375,26 @@ model ProposalView {
 
 /// Historical completed jobs for payroll/analytics
 model PastJob {
-  id            String   @id @default(cuid())
-  tenantId      String
-  leadId        String?
-  appointmentId String?
-  crewUserId    String?
-  customerName  String?
-  address       String?
-  squares       Float?
-  extrasJson    String? // JSON array of { title, price }
-  usedSquares   Float?
-  rateTier      String? // easy | medium | difficult
-  ratePerSquare Float?
-  installTotal  Float? // usedSquares * ratePerSquare
-  extrasTotal   Float?
-  grandTotal    Float?
-  completedAt   DateTime @default(now())
-  createdAt     DateTime @default(now())
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-  lead          Lead?    @relation(fields: [leadId], references: [id])
+  id              String   @id @default(cuid())
+  tenantId        String
+  leadId          String?
+  appointmentId   String?
+  crewUserId      String?
+  customerName    String?
+  address         String?
+  squares         Float?
+  extrasJson      String? // JSON array of { title, price }
+  usedSquares     Float?
+  rateTier        String? // easy | medium | difficult
+  ratePerSquare   Float?
+  installTotal    Float? // usedSquares * ratePerSquare
+  extrasTotal     Float?
+  grandTotal      Float?
+  attachmentsJson String? // JSON array of { id, name, url }
+  completedAt     DateTime @default(now())
+  createdAt       DateTime @default(now())
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  lead            Lead?    @relation(fields: [leadId], references: [id])
 
   @@index([tenantId, completedAt])
   @@index([leadId])
@@ -414,4 +445,61 @@ model JobScope {
   tenant         Tenant      @relation(fields: [tenantId], references: [id])
 
   @@index([tenantId, appointmentId])
+}
+
+/// Payment requests generated on crew job completion (for payroll review)
+model CrewPaymentRequest {
+  id              String    @id @default(cuid())
+  tenantId        String
+  appointmentId   String?
+  pastJobId       String? // Link to PastJob if already recorded
+  crewUserId      String? // Crew user who submitted
+  amount          Float? // Grand total requested
+  rateTier        String? // easy | medium | difficult (copy for convenience)
+  // Snapshot fields (fallback if PastJob not yet persisted)
+  customerName    String?
+  address         String?
+  usedSquares     Float?
+  ratePerSquare   Float?
+  installTotal    Float?
+  extrasTotal     Float?
+  grandTotal      Float?
+  extrasJson      String? // JSON array of { title, price }
+  attachmentsJson String? // JSON array of { id, name, url }
+  paid            Boolean?  @default(false) // Mark when payroll processed
+  paidAt          DateTime?
+  createdAt       DateTime  @default(now())
+  tenant          Tenant    @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, crewUserId])
+  @@index([tenantId, appointmentId])
+}
+
+/// Sales commission payment requests (distinct from crew requests)
+model SalesPaymentRequest {
+  id                String       @id @default(cuid())
+  tenantId          String
+  leadId            String?
+  appointmentId     String?
+  salesUserId       String?
+  salesUserName     String? // Cached salesperson name at creation time (for historical integrity)
+  commissionPercent Float? // Commission percent applied (e.g. 10 for 10%)
+  contractPrice     Float? // Base approved contract price (without extras)
+  customerName      String? // Customer or job display name snapshot
+  address           String? // Job address snapshot
+  extrasJson        String? // JSON array of { title, price }
+  grandTotal        Float? // contractPrice + extrasTotal
+  amount            Float? // Commission amount requested (grandTotal * commissionPercent/100)
+  paid              Boolean?     @default(false)
+  paidAt            DateTime?
+  createdAt         DateTime     @default(now())
+  tenant            Tenant       @relation(fields: [tenantId], references: [id])
+  lead              Lead?        @relation(fields: [leadId], references: [id])
+  appointment       Appointment? @relation(fields: [appointmentId], references: [id])
+  user              User?        @relation(name: "UserSalesPaymentRequests", fields: [salesUserId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, salesUserId])
+  @@index([leadId])
 }

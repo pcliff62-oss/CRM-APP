@@ -39,7 +39,8 @@
     "hytech-crm-iphone/**/*.tsx"
   ],
   "exclude": [
-  "node_modules",
-  "docs/**"
+    "node_modules",
+    "docs/**",
+    "prisma/**"
   ]
 }

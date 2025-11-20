@@ -27,12 +27,7 @@
 /* Signature image scale (example) */
 .signature-overlay { max-width: 60%; }
 
-/* Keep invisible filler cells from affecting layout */
+/* Keep filler cells invisible without collapsing the table geometry */
 .proposal-html td.gbb-filler, .proposal-html th.gbb-filler {
-   border: none !important;
-   padding: 0 !important;
-   width: 0.1px !important; /* collapse width but avoid 0 for some browsers */
-   min-width: 0 !important;
-   max-width: 0 !important;
-   overflow: hidden !important;
+   visibility: hidden;
 }

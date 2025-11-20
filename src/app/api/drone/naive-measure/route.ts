@@ -35,6 +35,8 @@ export async function POST(req: NextRequest) {
   const tmp = new Uint8Array(buffer.byteLength);
   tmp.set(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength));
   fd.append('file', new File([tmp.buffer], origName, { type: (file as any).type || 'image/jpeg' }) as any);
+  // Encourage splitting adjacent planes
+  fd.append('split', 'aggressive');
     // forward to worker
     const res = await fetch(aiUrl, { method: 'POST', body: fd as any });
     if (!res.ok) {

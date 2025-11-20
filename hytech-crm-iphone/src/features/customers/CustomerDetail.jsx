@@ -4,7 +4,7 @@ import { fetchCrews, assignJob, submitJob, upsertAppointment } from '../../lib/a
 // Allow parent to open Measure flow
 // Props extended: onStartMeasure?: (opts:{ address?: string|null })=>Promise<void> | void
 
-export default function CustomerDetail({ initial, onSave, onCancel, onDelete, appts = [], onOpenDocuments, onOpenPhotos, onStartMeasure, role = 'ADMIN' }) {
+export default function CustomerDetail({ initial, onSave, onCancel, onDelete, appts = [], onOpenDocuments, onOpenPhotos, onStartMeasure, onCreateQuote, role = 'ADMIN' }) {
   const seed = useMemo(() => ({
     id: initial?.id,
   name: initial?.name || initial?.customerName || '',
@@ -34,10 +34,16 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
     messages: 0,
   }
   const [showApptList, setShowApptList] = useState(false)
+  const [showComplete, setShowComplete] = useState(false)
+  const [showAssign, setShowAssign] = useState(false)
   const jobAppt = useMemo(() => (thisAppts || []).find(a => a.job) || null, [thisAppts])
   const parsedExtras = useMemo(() => {
-    try { return Array.isArray(JSON.parse(jobAppt?.extrasJson||'[]')) ? JSON.parse(jobAppt?.extrasJson||'[]') : [] } catch { return [] }
-  }, [jobAppt?.extrasJson])
+    // Sales-managed extras: use lead extrasJson if no job extras
+    const jobRaw = jobAppt?.extrasJson
+    const leadRaw = initial?.extrasJson || '[]'
+    const raw = jobRaw && jobRaw !== '[]' ? jobRaw : leadRaw
+    try { return Array.isArray(JSON.parse(raw||'[]')) ? JSON.parse(raw||'[]') : [] } catch { return [] }
+  }, [jobAppt?.extrasJson, initial?.extrasJson])
   const [extras, setExtras] = useState(() => {
     const arr = parsedExtras.map((x, i) => {
       if (typeof x === 'string') return { id: `ex-${i}`, title: x, price: '' }
@@ -135,12 +141,28 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
       <div className="grid grid-cols-2 gap-3">
   {/* Prioritized actions at top */}
   <Tile label="Measure" count={counts.measurements} icon="📏" onClick={()=> onStartMeasure?.({ address: form.address || null })} />
-        <Tile label="Create Quote" count={counts.estimates} icon="📄" disabled />
+        <Tile
+          label="Create Quote"
+          count={counts.estimates}
+          icon="📄"
+          onClick={()=> {
+            const leadId = initial?.leadId || null
+            if (!leadId) {
+              alert('No lead available to prefill. Create or select a lead first.')
+              return
+            }
+            onCreateQuote?.({ leadId })
+          }}
+        />
 
-        {/* Assign job */}
-        <Tile label="Assign Job" count={0} icon="🧰" onClick={()=>openAssignJob(form)} emphasis />
-        {/* Complete job */}
-        <Tile label="Complete Job" count={0} icon="✅" onClick={()=>openCompleteJob(form)} />
+        {/* Assign job (non-crew) */}
+        {role !== 'CREW' && (
+          <Tile label="Assign Job" count={0} icon="🧰" onClick={()=> setShowAssign(true)} emphasis />
+        )}
+        {/* Complete job (non-crew) */}
+        {role !== 'CREW' && (
+          <Tile label="Complete Job" count={0} icon="✅" onClick={()=> setShowComplete(true)} />
+        )}
 
         {/* Remaining actions */}
         <Tile label="Communications" count={counts.communications} icon="💬" />
@@ -219,16 +241,27 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
             onCancel={()=> setShowExtras(false)}
             onSave={async (items)=>{
               try {
-                const id = jobAppt?.id
-                if (!id) { alert('No job scheduled yet. Assign the job first.'); return }
                 const payload = items.filter(it=> (it.title||'').trim() || (Number(it.price)||0)).map(it=> ({ title: String(it.title||'').trim(), price: Number(it.price)||0 }))
-                const saved = await upsertAppointment({ id, extrasJson: JSON.stringify(payload) })
-                // Sync from saved
-                const next = (()=>{ try { const arr = JSON.parse(saved?.extrasJson || '[]'); return Array.isArray(arr)? arr.map((x,i)=> ({ id: `ex-${i}`, title: x?.title || '', price: x?.price ?? '' })) : [] } catch { return [] } })()
-                setExtras(next)
+                // Persist to job if crew job exists; else to lead extras endpoint
+                if (jobAppt?.id) {
+                  const saved = await upsertAppointment({ id: jobAppt.id, extrasJson: JSON.stringify(payload) })
+                  const next = (()=>{ try { const arr = JSON.parse(saved?.extrasJson || '[]'); return Array.isArray(arr)? arr.map((x,i)=> ({ id: `ex-${i}`, title: x?.title || '', price: x?.price ?? '' })) : [] } catch { return [] } })()
+                  setExtras(next)
+                } else if (initial?.leadId) {
+                  await fetch(`/api/leads/${encodeURIComponent(initial.leadId)}/extras`, {
+                    method:'PATCH',
+                    headers:{ 'Content-Type':'application/json' },
+                    body: JSON.stringify({ extrasJson: JSON.stringify(payload) })
+                  })
+                  const next = payload.map((x,i)=> ({ id:`ex-${i}`, title:x.title, price:x.price }))
+                  setExtras(next)
+                } else {
+                  // Fallback: local only
+                  setExtras(payload.map((x,i)=> ({ id:`ex-${i}`, title:x.title, price:x.price })))
+                }
                 setShowExtras(false)
               } catch (e) {
-                alert(e?.message || String(e))
+                // Silent per requirement
               }
             }}
           />
@@ -241,7 +274,66 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
       )}
       {showComplete && (
         <Modal title="Complete Job" onClose={()=>setShowComplete(false)}>
-          <CompleteJobForm customer={form} onDone={()=>setShowComplete(false)} />
+          <CompleteJobModal
+            customer={form}
+            extras={extras}
+            commissionPercent={deriveCommissionPercent(initial) /* may read from settings; fallback inside fn */}
+            onClose={()=>setShowComplete(false)}
+            onSubmit={async ()=>{
+              // Persist completion (optional enhancement): submit job data similar to legacy CompleteJobForm
+              try {
+                const appt = (Array.isArray(initial?.appointments)? initial.appointments: [])?.find?.(a=>a.job)
+                const id = appt?.id || ''
+                const extraItems = extras.map((it,i)=> ({ id:`ex-${i}`, title:it.title, price:Number(it.price)||0 }))
+                if (id) {
+                  await submitJob(id, { extras: extraItems, attachments: [] })
+                }
+                // Fire sales payment request (simplified: always use assignee/user name)
+                const commissionPercent = deriveCommissionPercent(initial)
+                const contractPrice = Number(initial?.contractPrice ?? 0) || 0
+                const extrasSum = extraItems.reduce((s,x)=> s + (Number(x.price)||0), 0)
+                const grandTotal = contractPrice + extrasSum
+                const amount = grandTotal * (commissionPercent/100)
+                let salesUserId = initial?.assignee?.id || initial?.assigneeId || initial?.user?.id || initial?.userId || undefined
+                let salesUserName = initial?.assignee?.name || initial?.user?.name || undefined
+                // Fallback: if we have no userId, attempt to pull first SALES user
+                if (!salesUserId) {
+                  try {
+                    const resSales = await fetch('/api/users?role=SALES', { cache:'no-store' })
+                    const sj = await resSales.json().catch(()=>({ items:[] }))
+                    const first = Array.isArray(sj.items)? sj.items[0]: null
+                    if (first?.id) salesUserId = first.id
+                    if (!salesUserName && first?.name) salesUserName = first.name
+                  } catch {}
+                }
+                // Do not block if name missing; backend will enrich from salesUserId
+                if (!salesUserId) {
+                  try { window.alert('Sales user id missing; cannot submit payment request yet.') } catch {}
+                  return
+                }
+                const payload = {
+                  appointmentId: id || undefined,
+                  salesUserId: salesUserId || undefined,
+                  salesUserName,
+                  customerName: initial?.name || initial?.customerName || 'Customer',
+                  address: initial?.address || '',
+                  grandTotal,
+                  commissionPercent,
+                  amount,
+                  extrasJson: JSON.stringify(extraItems)
+                }
+                await fetch('/api/sales-payment-requests', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload) }).catch(()=>{})
+                // Move pipeline stage to COMPLETED if lead exists
+                if (initial?.leadId) {
+                  fetch('/api/leads', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ id: initial.leadId, stage: 'COMPLETED' }) }).catch(()=>{})
+                }
+                if (typeof window !== 'undefined') {
+                  try { window.alert('Payment request submitted') } catch {}
+                }
+              } catch {/* silent */}
+              setShowComplete(false)
+            }}
+          />
         </Modal>
       )}
     </div>
@@ -284,6 +376,84 @@ function formatUSD(value) {
   return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(num)
 }
 
+// Attempt to derive commission percent (User.commissionPercent if available) else fallback to 10%
+function deriveCommissionPercent(customerInitial) {
+  // If initial includes a user or assignee with commissionPercent use that
+  try {
+    const percent = customerInitial?.assignee?.commissionPercent ?? customerInitial?.commissionPercent
+    if (typeof percent === 'number' && isFinite(percent) && percent > 0) return percent
+  } catch {}
+  return 10 // default 10%
+}
+
+function CompleteJobModal({ customer, extras = [], commissionPercent = 10, onClose, onSubmit }) {
+  const approved = String(customer?.status||'').toUpperCase() === 'APPROVED'
+  const baseTotal = Number(customer?.contractPrice ?? 0) || 0
+  const parsedExtras = extras.map((x)=> ({ title: x.title || '', price: Number(x.price)||0 }))
+  const extrasSum = parsedExtras.reduce((sum,it)=> sum + (Number(it.price)||0), 0)
+  const grand = baseTotal + extrasSum
+  const commissionAmount = grand * (commissionPercent/100)
+  return (
+    <div className="space-y-5">
+      <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-sm">
+        <div className="flex items-center justify-between">
+          <div className="font-medium">Original Approved Job Total</div>
+          <div className="font-semibold">{formatUSD(baseTotal)}</div>
+        </div>
+        {!approved && (
+          <div className="mt-2 text-xs text-amber-600">Status not APPROVED – base may be provisional.</div>
+        )}
+      </div>
+      <div className="space-y-2">
+        <div className="text-sm font-medium">Extras Added</div>
+        <div className="rounded-lg border border-neutral-200 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-neutral-100 text-neutral-600">
+                <th className="text-left px-3 py-2 font-medium">Description</th>
+                <th className="text-right px-3 py-2 font-medium">Price</th>
+              </tr>
+            </thead>
+            <tbody>
+              {parsedExtras.length === 0 && (
+                <tr><td className="px-3 py-2 text-neutral-500" colSpan={2}>No extras.</td></tr>
+              )}
+              {parsedExtras.map((line,i)=> (
+                <tr key={i} className="odd:bg-white even:bg-neutral-50">
+                  <td className="px-3 py-2">{line.title || 'Extra'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{line.price? formatUSD(line.price): ''}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-emerald-50 border-t border-emerald-200">
+                <td className="px-3 py-2 font-semibold text-emerald-800">Extras Subtotal</td>
+                <td className="px-3 py-2 text-right font-semibold text-emerald-700 tabular-nums">{formatUSD(extrasSum)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+      <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+        <div className="flex items-center justify-between text-sm">
+          <div className="font-semibold text-emerald-900">Grand Total</div>
+          <div className="font-bold text-emerald-700">{formatUSD(grand)}</div>
+        </div>
+      </div>
+      <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
+        <div className="flex items-center justify-between">
+          <div className="font-medium">Sales Commission ({commissionPercent}%)</div>
+          <div className="font-semibold text-blue-700 tabular-nums">{formatUSD(commissionAmount)}</div>
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 pt-2">
+        <button type="button" onClick={onClose} className="h-9 px-3 rounded-md border">Close</button>
+  <button type="button" onClick={onSubmit} className="h-9 px-4 rounded-md bg-emerald-600 text-white">Submit</button>
+      </div>
+    </div>
+  )
+}
+
 // Local UI state and forms
 function Modal({ title, onClose, children }){
   return (
@@ -299,20 +469,7 @@ function Modal({ title, onClose, children }){
   )
 }
 
-function useJobUi() {
-  const [showAssign, setShowAssign] = useState(false)
-  const [showComplete, setShowComplete] = useState(false)
-  function openAssignJob(){ setShowAssign(true) }
-  function openCompleteJob(){ setShowComplete(true) }
-  return { showAssign, setShowAssign, showComplete, setShowComplete, openAssignJob, openCompleteJob }
-}
-
-// hoist within component file scope
-const { openAssignJob, openCompleteJob, showAssign, setShowAssign, showComplete, setShowComplete } = (()=>{
-  // simple singleton per module
-  const state = { openAssignJob: (c)=>{}, openCompleteJob: (c)=>{}, showAssign:false, setShowAssign:()=>{}, showComplete:false, setShowComplete:()=>{} }
-  return state
-})()
+// (Removed legacy singleton state helpers; using component state instead)
 
 function AssignJobForm({ customer, onDone }){
   const [crews, setCrews] = useState([])

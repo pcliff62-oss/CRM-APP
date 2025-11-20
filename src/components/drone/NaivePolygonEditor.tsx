@@ -68,6 +68,8 @@ export default function NaivePolygonEditor(props: {
   // Initialize viewBox when image size known
   const accessoryDragTypeRef = useRef<string | null>(null);
   const [dragAccessory, setDragAccessory] = useState<null | { fi: number; accId: string }>(null);
+  // Keep the last AI prediction snapshot across "Clear AI" so we can learn from deletions on Save
+  const lastAIPredRef = useRef<Feature[] | null>(null);
 
   // Accessories config state
   const [skylightSize, setSkylightSize] = useState<string>('M08');
@@ -97,7 +99,13 @@ export default function NaivePolygonEditor(props: {
   // Fixed snap sensitivities per request
   const SNAP_PX = 4; // axis/grid snap sensitivity in screen pixels
   const VERTEX_SNAP_PX = 6; // vertex snap sensitivity in screen pixels
+  // Crosshair axis snap tolerance (screen pixels) used to lock preview to guides
+  const CROSSHAIR_SNAP_PX = 10;
+  // Pixel tolerance for treating a point as on a boundary/endpoint
+  const BOUNDARY_PX = 10;
   const [selectedFi, setSelectedFi] = useState<number | null>(null);
+  // Track pointer position in outer SVG coords to re-render crosshair on move
+  const [cursorOuter, setCursorOuter] = useState<{ x: number; y: number } | null>(null);
 
   // Whole-polygon dragging
   const [polyDrag, setPolyDrag] = useState<null | { fi: number; start: { x: number; y: number }; base: number[][] }>(null);
@@ -261,6 +269,21 @@ export default function NaivePolygonEditor(props: {
     return map;
   }, [features]);
 
+  // Derive approximate pixel->feet linear scale from total area (more stable than perimeter)
+  const pxToFeet = useMemo(() => {
+    try {
+      const totalSquares = totals.totalSquares;
+      if (!totalSquares || totalSquares <= 0) return null;
+      const totalFt2 = totalSquares * 100; // 1 square = 100 ft²
+      // Weighted pixel area sum (already pitch-adjusted) gives mapping from px² to ft²
+      const weightedPxArea = featureWeightedPxAreaSum();
+      if (!weightedPxArea || weightedPxArea <= 0) return null;
+      // Assume average pitch multiplier has already been applied; linear scale ≈ sqrt(ft² / px²)
+      const feetPerPixel = Math.sqrt(totalFt2 / weightedPxArea);
+      return feetPerPixel;
+    } catch { return null; }
+  }, [features, totals.totalSquares]);
+
   function addAccessory(fi: number, x: number, y: number, type: string) {
     // Create placeholder accessory with default draft values; open inline editor
     let data: any = {};
@@ -345,6 +368,28 @@ export default function NaivePolygonEditor(props: {
     inSvg.x = inScreen.x;
     inSvg.y = inScreen.y;
     const out = inSvg.matrixTransform(screenToSvg);
+    return { x: out.x, y: out.y };
+  };
+
+  // Convert a point from outer SVG user coords back into rotated group (world) coords
+  const outerToWorld = (pt: { x: number; y: number }) => {
+    const svg = svgRef.current;
+    const g = groupRef.current;
+    if (!svg || !g) return pt;
+    const ptSvg = svg.createSVGPoint();
+    ptSvg.x = pt.x;
+    ptSvg.y = pt.y;
+    const svgToScreen = svg.getScreenCTM();
+    const gToScreen = g.getScreenCTM();
+    if (!svgToScreen || !gToScreen) return pt;
+    // outer(svg user) -> screen
+    const inScreen = ptSvg.matrixTransform(svgToScreen);
+    // screen -> group(world)
+    const screenToGroup = gToScreen.inverse();
+    const tmp = (svg as any).createSVGPoint ? (svg as any).createSVGPoint() : ptSvg;
+    tmp.x = inScreen.x;
+    tmp.y = inScreen.y;
+    const out = tmp.matrixTransform(screenToGroup);
     return { x: out.x, y: out.y };
   };
 
@@ -499,9 +544,32 @@ export default function NaivePolygonEditor(props: {
     return (o1>0)!==(o2>0) && (o3>0)!==(o4>0);
   }
 
+  // Return parametric intersection (t along a->b, u along c1->c2) or null if none / parallel.
+  function segmentIntersectionParams(a:[number,number], b:[number,number], c1:[number,number], c2:[number,number]) {
+    const r = [b[0]-a[0], b[1]-a[1]];
+    const s = [c2[0]-c1[0], c2[1]-c1[1]];
+    const denom = r[0]*s[1] - r[1]*s[0];
+    if (Math.abs(denom) < 1e-12) return null; // parallel or almost
+    const diff = [c1[0]-a[0], c1[1]-a[1]];
+    const t = (diff[0]*s[1] - diff[1]*s[0]) / denom;
+    const u = (diff[0]*r[1] - diff[1]*r[0]) / denom;
+    if (t >= -1e-9 && t <= 1+1e-9 && u >= -1e-9 && u <= 1+1e-9) return { t, u };
+    return null;
+  }
+
   // Check if a segment from a->b would cross any polygon edges on the same layer
   function segmentCrossesSameLayer(a: [number,number], b: [number,number], layerId: string) {
-    const endpointTouch = (p:[number,number], q:[number,number]) => Math.hypot(p[0]-q[0], p[1]-q[1]) < 1e-6;
+    // Use pixel-based world tolerance for endpoint/boundary tests
+    let worldTol = 1e-3;
+    try {
+      const svg = svgRef.current;
+      if (svg && viewBox) {
+        const rect = svg.getBoundingClientRect();
+        const cw = svg.clientWidth || rect.width || 1;
+        worldTol = (viewBox.w / cw) * BOUNDARY_PX;
+      }
+    } catch {}
+    const endpointTouch = (p:[number,number], q:[number,number]) => Math.hypot(p[0]-q[0], p[1]-q[1]) < worldTol;
     for (const f of features) {
       if (f.properties?.layerId !== layerId) continue;
       const other = f.geometry.coordinates[0] as number[][];
@@ -512,6 +580,19 @@ export default function NaivePolygonEditor(props: {
           const collinear = Math.abs((b[0]-a[0])*(c2[1]-c1[1]) - (b[1]-a[1])*(c2[0]-c1[0])) < 1e-4;
           if (collinear) continue; // allow tracing along shared edges
           if (endpointTouch(a,c1)||endpointTouch(a,c2)||endpointTouch(b,c1)||endpointTouch(b,c2)) continue; // allow endpoint touches
+          // Exempt pure start/end departures where start or end lies on other segment interior without crossing through it.
+          const params = segmentIntersectionParams(a,b,c1,c2);
+          if (params) {
+            const { t, u } = params;
+            const startOnOther = pointOnSegment(a[0],a[1], c1[0],c1[1], c2[0],c2[1], worldTol);
+            const endOnOther = pointOnSegment(b[0],b[1], c1[0],c1[1], c2[0],c2[1], worldTol);
+            const nearStart = t < worldTol;
+            const nearEnd = t > 1 - worldTol;
+            // If intersection occurs exactly at start or end param and that point lies on the other segment, allow (outward departure or arrival).
+            if ((nearStart && startOnOther) || (nearEnd && endOnOther)) continue;
+            // If intersection touches only at other segment's endpoint but we already didn't catch it via endpointTouch due to numeric drift, relax with u near 0/1.
+            if ((nearStart || nearEnd) && (u < worldTol || u > 1-worldTol)) continue;
+          }
           return true; // true crossing
         }
       }
@@ -525,6 +606,16 @@ export default function NaivePolygonEditor(props: {
     function centroid(poly: number[][]) {
       let x=0,y=0,a=0; for (let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];const f=p[0]*q[1]-q[0]*p[1];x+=(p[0]+q[0])*f;y+=(p[1]+q[1])*f;a+=f;} a*=0.5; if (Math.abs(a)<1e-9) return {x:poly[0][0],y:poly[0][1]}; return {x:x/(6*a), y:y/(6*a)};
     }
+    // Pixel-scaled world tolerance for boundary contact checks
+    let worldTol = 1e-3;
+    try {
+      const svg = svgRef.current;
+      if (svg && viewBox) {
+        const rect = svg.getBoundingClientRect();
+        const cw = svg.clientWidth || rect.width || 1;
+        worldTol = (viewBox.w / cw) * BOUNDARY_PX;
+      }
+    } catch {}
     for (const f of features) {
       if (f.properties?.layerId !== layerId) continue;
       const other = f.geometry.coordinates[0] as number[][];
@@ -548,7 +639,7 @@ export default function NaivePolygonEditor(props: {
         for (let j=0;j<other.length;j++) {
           const q1 = other[j];
           const q2 = other[(j+1)%other.length];
-          if (pointOnSegment(p[0],p[1], q1[0],q1[1], q2[0],q2[1], 1e-3)) { boundaryContact = true; break; }
+          if (pointOnSegment(p[0],p[1], q1[0],q1[1], q2[0],q2[1], worldTol)) { boundaryContact = true; break; }
         }
         if (boundaryContact) break;
       }
@@ -558,7 +649,7 @@ export default function NaivePolygonEditor(props: {
           for (let j=0;j<ring.length;j++) {
             const q1 = ring[j];
             const q2 = ring[(j+1)%ring.length];
-            if (pointOnSegment(p[0],p[1], q1[0],q1[1], q2[0],q2[1], 1e-3)) { boundaryContact = true; break; }
+            if (pointOnSegment(p[0],p[1], q1[0],q1[1], q2[0],q2[1], worldTol)) { boundaryContact = true; break; }
           }
           if (boundaryContact) break;
         }
@@ -678,6 +769,35 @@ export default function NaivePolygonEditor(props: {
     return { x: sx, y: sy };
   }
 
+  // Compute the exact world coordinate at the center of the visible crosshair
+  function lockedCrosshairWorldPoint(): { x: number; y: number } | null {
+    try {
+      if (!viewBox) return null;
+      // Base outer position: snapped hoverPt if present, else current pointer, else center
+      let pOuter = hoverPt ? worldToOuter(hoverPt) : (cursorOuter || { x: viewBox.x + viewBox.w/2, y: viewBox.y + viewBox.h/2 });
+      // Build outer-space vertices
+      const vertsOuter: { x: number; y: number }[] = [];
+      for (const f of features) {
+        for (const pt of f.geometry.coordinates[0]) vertsOuter.push(worldToOuter({ x: pt[0], y: pt[1] }));
+      }
+      if (drawing && drawing.points.length) {
+        for (const pt of drawing.points) vertsOuter.push(worldToOuter({ x: pt[0], y: pt[1] }));
+      }
+      let guideX: number | null = null, guideY: number | null = null;
+      let bestDx = Infinity, bestDy = Infinity;
+      for (const v of vertsOuter) {
+        const dx = Math.abs(v.x - pOuter.x);
+        const dy = Math.abs(v.y - pOuter.y);
+        if (dx < bestDx && dx <= CROSSHAIR_SNAP_PX) { bestDx = dx; guideX = v.x; }
+        if (dy < bestDy && dy <= CROSSHAIR_SNAP_PX) { bestDy = dy; guideY = v.y; }
+      }
+      const drawX = guideX ?? pOuter.x;
+      const drawY = guideY ?? pOuter.y;
+      const w = outerToWorld({ x: drawX, y: drawY });
+      return w;
+    } catch { return null; }
+  }
+
   function snapPoint(x: number, y: number) {
     // Priority: vertex -> segment -> axis align
     // Use pixel-based tolerance for vertex snapping so you can get closer without snapping
@@ -697,7 +817,9 @@ export default function NaivePolygonEditor(props: {
   }
 
   const onMouseMove = (e: React.MouseEvent) => {
-    const { x, y } = svgToWorld(e);
+  const { x, y } = svgToWorld(e);
+  // Update pointer position in outer SVG space (state to trigger render)
+  try { setCursorOuter(worldToOuter({ x, y })); } catch {}
     if (dragAccessory) {
       updateAccessoryPosition(dragAccessory.fi, dragAccessory.accId, x, y);
       return;
@@ -749,7 +871,42 @@ export default function NaivePolygonEditor(props: {
         })
       );
   } else if (drawing) {
-      const sp = snapPoint(x, y);
+      // Base snap (vertex/segment/orientation/axis/grid in world space)
+      let sp = snapPoint(x, y);
+      // Lock preview to the same crosshair axis guides (computed in outer/svg space)
+      try {
+        const svg = svgRef.current;
+        const g = groupRef.current;
+        if (svg && g && viewBox) {
+          const pOuter = worldToOuter(sp);
+          // Collect all vertex axes in outer space
+          const vertsOuter: { x: number; y: number }[] = [];
+          for (const f of features) {
+            for (const pt of f.geometry.coordinates[0]) {
+              const o = worldToOuter({ x: pt[0], y: pt[1] });
+              vertsOuter.push(o);
+            }
+          }
+          if (drawing && drawing.points.length) {
+            for (const pt of drawing.points) {
+              const o = worldToOuter({ x: pt[0], y: pt[1] });
+              vertsOuter.push(o);
+            }
+          }
+          let guideX: number | null = null;
+          let guideY: number | null = null;
+          let bestDx = Infinity, bestDy = Infinity;
+          for (const v of vertsOuter) {
+            const dx = Math.abs(v.x - pOuter.x);
+            const dy = Math.abs(v.y - pOuter.y);
+            if (dx < bestDx && dx <= CROSSHAIR_SNAP_PX) { bestDx = dx; guideX = v.x; }
+            if (dy < bestDy && dy <= CROSSHAIR_SNAP_PX) { bestDy = dy; guideY = v.y; }
+          }
+          const lockedOuter = { x: guideX ?? pOuter.x, y: guideY ?? pOuter.y };
+          const lockedWorld = outerToWorld(lockedOuter);
+          sp = lockedWorld;
+        }
+      } catch {}
       setHoverPt(sp);
   } else if (mode === 'pitch') {
       setHoverPt({ x, y });
@@ -802,7 +959,7 @@ export default function NaivePolygonEditor(props: {
           if (d < bestD) { bestD = d; bestVi = vi; }
         }
         if (bestVi >= 0 && bestD <= tolWorld) {
-          // Snap last point to that vertex and mark ref
+          // Snap last point to that vertex and mark rec
           pts[pts.length - 1] = [ringF[bestVi][0], ringF[bestVi][1]];
           lastRef = { fi: firstRef.fi, vi: bestVi } as any;
           refs[refs.length - 1] = lastRef as any;
@@ -862,32 +1019,8 @@ export default function NaivePolygonEditor(props: {
       }
       if (hasBoundaryContactAny) break;
     }
-  if (hasBoundaryContactAny) {
-      // ensure no true crossings with any same-layer polygon edges
-      const endpointTouch = (p:[number,number], q:[number,number]) => Math.hypot(p[0]-q[0], p[1]-q[1]) < 1e-6;
-      const crosses = (() => {
-        for (const f of features) {
-          if (f.properties?.layerId !== layerId) continue;
-          const other = f.geometry.coordinates[0] as number[][];
-          for (let i=0;i<pts.length;i++) {
-            const a1 = pts[i] as [number,number];
-            const a2 = pts[(i+1)%pts.length] as [number,number];
-            for (let j=0;j<other.length;j++) {
-              const b1 = other[j] as [number,number];
-              const b2 = other[(j+1)%other.length] as [number,number];
-              if (segmentsIntersect(a1,a2,b1,b2)) {
-                const collinear = Math.abs((a2[0]-a1[0])*(b2[1]-b1[1]) - (a2[1]-a1[1])*(b2[0]-b1[0])) < 1e-4;
-                if (collinear) continue;
-                if (endpointTouch(a1,b1)||endpointTouch(a1,b2)||endpointTouch(a2,b1)||endpointTouch(a2,b2)) continue;
-                return true;
-              }
-            }
-          }
-        }
-        return false;
-      })();
-      if (crosses) return; // reject
-    } else {
+    if (!hasBoundaryContactAny) {
+      // Only block overlaps when there is no shared boundary; shared edges are permitted.
       if (polygonOverlapsSameLayer(pts, layerId)) {
         // Reject finish; could flash or notify later
         return;
@@ -928,7 +1061,11 @@ export default function NaivePolygonEditor(props: {
     // Only respond to primary button clicks
     if (e.button !== 0) return;
   // No suppression of clicks after panning
-  const { x, y } = svgToWorld(e);
+  const { x: rawX, y: rawY } = svgToWorld(e);
+  // Use the true crosshair center (world) for placement when available
+  const locked = lockedCrosshairWorldPoint();
+  const x = locked ? locked.x : rawX;
+  const y = locked ? locked.y : rawY;
   const svg = svgRef.current;
     if (!svg) return;
   const rect = svg.getBoundingClientRect();
@@ -967,32 +1104,11 @@ export default function NaivePolygonEditor(props: {
     }
     // Drawing interactions
     if (mode !== 'draw') return;
-    // If not currently drawing, start a new polygon at the snapped point
+    // If not currently drawing, start a new polygon at the true crosshair center
     if (!drawing) {
-      // Prefer snapping to existing vertex (tight pixel tolerance), then segment endpoints/projection, else axis aligned snap
-      const cw = svg.clientWidth || rect.width || 1;
-  const vTolWorldStart = viewBox ? (viewBox.w / cw) * VERTEX_SNAP_PX : 10;
-      const vinfo = nearestVertexInfo(x, y, vTolWorldStart);
-      if (vinfo) {
-        setDrawing({ points: [[vinfo.x, vinfo.y]], refs: [{ fi: vinfo.fi, vi: vinfo.vi }] });
-        return;
-      }
-      const near0: SegmentInfo = nearestSegmentInfo(x, y);
-      if (near0) {
-        const tolPx = 10;
-        const tolWorld = viewBox ? (viewBox.w / (svg.clientWidth || rect.width || 1)) * tolPx : 10;
-        if (near0.dist <= tolWorld) {
-          const da = Math.hypot(near0.a[0] - x, near0.a[1] - y);
-          const db = Math.hypot(near0.b[0] - x, near0.b[1] - y);
-          const chosen = da <= db ? near0.a : near0.b;
-          const chosenVi = da <= db ? near0.ei : (near0.ei + 1) % features[near0.fi].geometry.coordinates[0].length;
-          setDrawing({ points: [[chosen[0], chosen[1]]], refs: [{ fi: near0.fi, vi: chosenVi }] });
-          return;
-        }
-      }
-  const sp0 = axisAlign(x, y, SNAP_PX);
+      const sp0 = { x, y };
       // Block starting inside an existing polygon on the same layer (allow boundary touches)
-      {
+  {
         const targetLayerId = activeLayerId;
         for (const f of features) {
           if (f.properties?.layerId !== targetLayerId) continue;
@@ -1000,7 +1116,7 @@ export default function NaivePolygonEditor(props: {
           if (pointInPolygon(sp0.x, sp0.y, ring)) {
             let onBoundary = false;
             const cwB = svg.clientWidth || rect.width || 1;
-            const boundTol = viewBox ? (viewBox.w / cwB) * Math.max(2, VERTEX_SNAP_PX/2) : 2;
+    const boundTol = viewBox ? (viewBox.w / cwB) * BOUNDARY_PX : 2;
             for (let i=0;i<ring.length;i++) {
               const a = ring[i];
               const b = ring[(i+1)%ring.length];
@@ -1014,65 +1130,7 @@ export default function NaivePolygonEditor(props: {
       return;
     }
     const pts = drawing.points;
-  // Vertex snap first (tight pixel tolerance)
-  const cw2 = svg.clientWidth || rect.width || 1;
-  const vTolWorld = viewBox ? (viewBox.w / cw2) * VERTEX_SNAP_PX : 10;
-  const vinfo = nearestVertexInfo(x, y, vTolWorld);
-    if (vinfo) {
-      if (pts.length >= 3) {
-        const first = { x: pts[0][0], y: pts[0][1] };
-        const closeTol = viewBox ? (viewBox.w / (svg.clientWidth || rect.width || 1)) * VERTEX_SNAP_PX : 10;
-        if (distance({ x: vinfo.x, y: vinfo.y }, first) <= closeTol) { finishDraw(); return; }
-      }
-      const last = pts[pts.length - 1];
-      if (!last || (!segmentCrossesSameLayer([last[0], last[1]], [vinfo.x, vinfo.y], activeLayerId) && Math.hypot(vinfo.x - last[0], vinfo.y - last[1]) >= 1)) {
-        const newPoints = [...pts, [vinfo.x, vinfo.y]];
-        const newRefs = [...(drawing?.refs||[]), { fi: vinfo.fi, vi: vinfo.vi }];
-        setDrawing({ points: newPoints, refs: newRefs });
-  // Allow placing multiple points along the same shared ring; do not auto-close here.
-      }
-      return;
-    }
-    // Segment sharing: stick to shared lines and endpoints when close
-  const near: SegmentInfo = nearestSegmentInfo(x, y);
-    if (near) {
-      const tolPx = 10;
-      const tolWorld = viewBox ? (viewBox.w / (svg.clientWidth || rect.width || 1)) * tolPx : 10;
-      if (near.dist <= tolWorld) {
-        const last = pts[pts.length - 1];
-        if (!last) {
-          // start exactly at the closer endpoint
-          const da = Math.hypot(near.a[0] - x, near.a[1] - y);
-          const db = Math.hypot(near.b[0] - x, near.b[1] - y);
-          const chosen = da <= db ? near.a : near.b;
-          const chosenVi = da <= db ? near.ei : (near.ei + 1) % features[near.fi].geometry.coordinates[0].length;
-          setDrawing({ points: [[chosen[0], chosen[1]]], refs: [{ fi: near.fi, vi: chosenVi }] });
-          return;
-        }
-        const lastProjDist = Math.hypot(near.proj.x - last[0], near.proj.y - last[1]);
-          if (lastProjDist <= tolWorld) {
-            const da = Math.hypot(near.a[0] - last[0], near.a[1] - last[1]);
-            const db = Math.hypot(near.b[0] - last[0], near.b[1] - last[1]);
-            const chosen = da > db ? near.a : near.b; // extend toward far endpoint
-            if (!segmentCrossesSameLayer([last[0], last[1]], [chosen[0], chosen[1]], activeLayerId) && Math.hypot(chosen[0] - last[0], chosen[1] - last[1]) >= 1) {
-              const chosenVi = da > db ? near.ei : (near.ei + 1) % features[near.fi].geometry.coordinates[0].length;
-              const newPoints = [...pts, [chosen[0], chosen[1]]];
-              const newRefs = [...(drawing?.refs||[]), { fi: near.fi, vi: chosenVi }];
-              setDrawing({ points: newPoints, refs: newRefs });
-              // Allow continued placement along shared ring without auto-closing.
-              return;
-            }
-        }
-        // Else snap onto the segment projection
-        const proj = near.proj;
-        if (!segmentCrossesSameLayer([last[0], last[1]], [proj.x, proj.y], activeLayerId) && Math.hypot(proj.x - last[0], proj.y - last[1]) >= 1) {
-          setDrawing({ points: [...pts, [proj.x, proj.y]], refs: [...(drawing?.refs||[]), null] });
-          return;
-        }
-      }
-    }
-    // Fallback to axis/grid aligned snapping
-  const sp = axisAlign(x, y, SNAP_PX);
+    const sp = { x, y };
     // First, allow closing near the start point using pixel-based tolerance
     if (pts.length >= 3) {
       const cw3 = svg.clientWidth || rect.width || 1;
@@ -1081,7 +1139,7 @@ export default function NaivePolygonEditor(props: {
       if (distance(sp, first) <= closeTol) { finishDraw(); return; }
     }
     // Then reject placing a point that falls strictly inside another polygon on the SAME layer as the polygon being drawn (edges allowed)
-    {
+  {
   const targetLayerId = activeLayerId;
   if (targetLayerId) {
         for (const f of features) {
@@ -1091,7 +1149,7 @@ export default function NaivePolygonEditor(props: {
             // Check if on boundary; if not, block
             let onBoundary = false;
             const cwB = svg.clientWidth || rect.width || 1;
-            const boundTol = viewBox ? (viewBox.w / cwB) * Math.max(2, VERTEX_SNAP_PX/2) : 2; // ~pixel-based
+      const boundTol = viewBox ? (viewBox.w / cwB) * BOUNDARY_PX : 2; // pixel-based
             for (let i=0;i<ring.length;i++) {
               const a = ring[i];
               const b = ring[(i+1)%ring.length];
@@ -1425,7 +1483,7 @@ export default function NaivePolygonEditor(props: {
         }
       } catch {}
   // Then recompute totals so report uses SqFt, not px^2
-  setMsg('Saving corrections...');
+      setMsg('Saving corrections...');
       // We'll pass freshly computed totals to the report API to avoid state staleness
       let computedTotals: { edgeTotalsFt: Record<string, number> | null; accessoryTotals?: Record<string, number> | null; totalSquares: number | null; totalPerimeterFt: number | null } = totals;
       try {
@@ -1480,6 +1538,130 @@ export default function NaivePolygonEditor(props: {
     }
   }
 
+  // --- AI auto-detect & feedback integration ---
+  const handleAIDetect = async () => {
+    if (!measurementId) return;
+    setMsg('Running AI detection...');
+    try {
+      const body = {
+        angleDeg: angleDeg || 0,
+        imageSrc: imageSrc || ''
+      };
+      const res = await fetch(`/api/measurements/${measurementId}/auto-detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Server ${res.status}: ${txt}`);
+      }
+      const data = await res.json();
+      if (!data.features) throw new Error('No features returned');
+      // If worker suggested a rotation, apply it so ridge aligns to X-axis
+      if (typeof data.angleDegSuggested === 'number' && !Number.isNaN(data.angleDegSuggested)) {
+        setAngleDeg(data.angleDegSuggested);
+      }
+      // Attach layer id & mark as ai
+      const aiFeatures = data.features.map((f: any) => ({
+        ...f,
+        properties: { ...(f.properties||{}), source: 'ai', layerId: activeLayerId }
+      }));
+      // Save snapshot of AI predictions for feedback even if user clears them
+      try { lastAIPredRef.current = slimFeatures(aiFeatures); } catch {}
+      setFeatures(prev => [...prev, ...aiFeatures]);
+      const rotMsg = (typeof data.angleDegSuggested === 'number' && !Number.isNaN(data.angleDegSuggested)) ? `; rotated ${data.angleDegSuggested.toFixed(1)}°` : '';
+      setMsg(`AI added ${aiFeatures.length} roof planes${rotMsg}`);
+    } catch (e:any) {
+      setMsg(`AI detection failed: ${e.message}`);
+      console.error(e);
+    }
+  }
+  function handleClearAI() {
+    setFeatures(prev => prev.filter(f => f.properties?.source !== 'ai'));
+    setMsg('Cleared AI planes (kept for feedback on Save)');
+  }
+  function geometryHash(ring: number[][]) {
+    return ring.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('|');
+  }
+  function diffAIFeatures(originalAI: Feature[], currentFeatures: Feature[]) {
+    // Enhanced diff: compare ALL current features to original AI by id/geometry.
+    // Reports: modified (geometry/edge labels), removed (AI missing now), added (new planes with no AI match).
+    const diffs: any[] = [];
+    const aiById: Record<string, Feature> = {};
+    const aiByGeom: Record<string, Feature> = {};
+    const matchedIds = new Set<string>();
+    const matchedGeom = new Set<string>();
+    for (const f of originalAI || []) {
+      const id = f.properties?.id;
+      const g = geometryHash(f.geometry.coordinates[0]);
+      if (id) aiById[id] = f;
+      aiByGeom[g] = f;
+    }
+    // Walk current features and find matches
+    for (const f of currentFeatures) {
+      const id = f.properties?.id;
+      const gNow = geometryHash(f.geometry.coordinates[0]);
+      let aiRef: Feature | undefined;
+      let matchKey: { kind: 'id'|'geom'; key: string } | null = null;
+      if (id && aiById[id]) { aiRef = aiById[id]; matchKey = { kind:'id', key:id }; }
+      else if (aiByGeom[gNow]) { aiRef = aiByGeom[gNow]; matchKey = { kind:'geom', key:gNow }; }
+      if (aiRef) {
+        // Check for changes
+        const gPrev = geometryHash(aiRef.geometry.coordinates[0]);
+        const geometryChanged = gPrev !== gNow;
+        const curEdges = f.properties?.edges || [];
+        const prevEdges = aiRef.properties?.edges || [];
+        const edgeDiff: any[] = [];
+        curEdges.forEach(e => {
+          const pEdge = prevEdges.find(pe => pe.i === e.i);
+          if (pEdge && pEdge.type !== e.type) edgeDiff.push({ i: e.i, from: pEdge.type, to: e.type });
+        });
+        if (geometryChanged || edgeDiff.length) {
+          diffs.push({ type: 'modified', aiFeatureId: aiRef.properties?.id, geometryChanged, edgeDiff, updatedFeature: f });
+        }
+        if (matchKey) {
+          if (matchKey.kind === 'id') matchedIds.add(matchKey.key);
+          else matchedGeom.add(matchKey.key);
+        }
+      } else {
+        // No AI match -> added plane
+        diffs.push({ type: 'added', newFeature: f });
+      }
+    }
+    // Any AI not matched -> removed
+    for (const [id, f] of Object.entries(aiById)) {
+      if (!matchedIds.has(id)) {
+        // Also ensure not matched by geometry (edge case):
+        const g = geometryHash(f.geometry.coordinates[0]);
+        if (!matchedGeom.has(g)) diffs.push({ type: 'removed', aiFeatureId: f.properties?.id, removedFeature: f });
+      }
+    }
+    return diffs;
+  }
+  // Wrap original save to send feedback when corrections made
+  const originalSaveRef = useRef<any>(null);
+  if (!originalSaveRef.current) originalSaveRef.current = save; // capture initial implementation
+  async function saveWithFeedback() {
+    // Capture AI originals: prefer currently present AI, else fall back to last AI snapshot (supports Clear AI case)
+    let aiOriginal = features.filter(f => f.properties?.source === 'ai');
+    if (!aiOriginal.length && lastAIPredRef.current && lastAIPredRef.current.length) {
+      aiOriginal = lastAIPredRef.current;
+    }
+    await originalSaveRef.current();
+    // After snapshot & recompute, compute diff
+    const current = features; // include all; diff fn filters sources
+    const feedback = diffAIFeatures(aiOriginal, current);
+    if (feedback.length) {
+      try {
+        await fetch(`/api/measurements/${measurementId}/ai-feedback`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ feedback }) });
+      } catch {}
+    }
+  }
+
+  const imgStyle = { imageRendering: 'pixelated' } as React.CSSProperties;
+
+  // --- Editor render ---
   return (
     <div className="space-y-2">
       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60 border-b">
@@ -1527,7 +1709,7 @@ export default function NaivePolygonEditor(props: {
           {/* Right: Save + Generate with status under */}
           <div className="flex flex-col items-end gap-1 min-w-[14rem]">
             <div className="flex items-center gap-2">
-        <button onClick={async ()=>{
+              <button onClick={async ()=>{
                 setLoadOpen(true);
                 setVersions(null);
                 try {
@@ -1538,7 +1720,10 @@ export default function NaivePolygonEditor(props: {
                 } catch {}
                 listLocalSnapshots();
               }} className="px-3 py-1 border rounded">Load</button>
-              <button onClick={save} className="px-3 py-1 border rounded">Save</button>
+              {/* AI buttons */}
+              <button onClick={handleAIDetect} className="px-3 py-1 border rounded bg-indigo-600 text-white" title="Let AI attempt automatic roof plane detection">AI Detect</button>
+              <button onClick={handleClearAI} className="px-3 py-1 border rounded" title="Remove AI predicted planes">Clear AI</button>
+              <button onClick={saveWithFeedback} className="px-3 py-1 border rounded">Save</button>
               <button onClick={generateReport} className="px-3 py-1 border rounded bg-emerald-600 text-white">Generate report</button>
             </div>
             {msg && (
@@ -1665,7 +1850,7 @@ export default function NaivePolygonEditor(props: {
                 cursor: mode==='pitch'
                   ? 'none'
                   : mode==='draw'
-                    ? 'crosshair'
+                    ? 'none'
                     : (drawing ? 'crosshair' : 'default')
               }}
             >
@@ -1826,20 +2011,58 @@ export default function NaivePolygonEditor(props: {
                     const c = polygonCentroid(ring);
                     const p = featurePitch(fi);
                     const area = featureAreaFt2(fi);
-                    // find first eave edge, if any
-                    const e = (edges.find((e)=> e.type==='eave') || null);
-                    let label = p === 0 ? 'flat' : `${p}/12`;
+                    let labelPitch = p === 0 ? 'flat' : `${p}/12`;
                     const labelX = c.x;
                     const labelY = c.y;
+                    // Dynamic font sizing: scale with viewBox width but clamp
+                    let fontSize = 12;
+                    if (viewBox) {
+                      fontSize = Math.max(10, Math.min(20, viewBox.w / 120));
+                    }
+                    // Separate lines for clarity
                     return (
                       <g pointerEvents="none" transform={`rotate(${-angleDeg} ${labelX} ${labelY})`}>
-                        <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="central" fontSize={14} fontFamily="monospace" fill="#111827" stroke="#fff" strokeWidth={1} paintOrder="stroke">
-                          {label}{area!=null ? `  •  ${area.toFixed(0)} SqFt.` : ''}
+                        <text x={labelX} y={labelY - fontSize*0.6} textAnchor="middle" dominantBaseline="central" fontSize={fontSize} fontFamily="monospace" fill="#111827" stroke="#fff" strokeWidth={fontSize/14} paintOrder="stroke">
+                          {labelPitch}
                         </text>
-                        {/* eave arrow removed per request */}
+                        {area!=null && (
+                          <text x={labelX} y={labelY + fontSize*0.6} textAnchor="middle" dominantBaseline="central" fontSize={fontSize} fontFamily="monospace" fill="#111827" stroke="#fff" strokeWidth={fontSize/14} paintOrder="stroke">
+                            {`${area.toFixed(0)} SqFt`}
+                          </text>
+                        )}
                       </g>
                     );
                   })()}
+                  {/* Edge length labels (feet) */}
+                  {pxToFeet && ring.map((p, i) => {
+                    const a = p;
+                    const b = ring[(i+1)%ring.length];
+                    const mid = { x: (a[0]+b[0])/2, y: (a[1]+b[1])/2 };
+                    const lenPx = Math.hypot(b[0]-a[0], b[1]-a[1]);
+                    // Apply pitch multiplier for rake, hip, valley edges (true roof surface length)
+                    const edgeType = (edges.find(e=> e.i===i)?.type || 'unknown') as EdgeType;
+                    const pitch = featurePitch(fi);
+                    const pitchMult = Math.sqrt(1 + Math.pow((pitch||0)/12,2));
+                    const lenFt = lenPx * pxToFeet * pitchMult;
+                    // Skip extremely short segments (< 0.5ft) to reduce clutter
+                    if (lenFt < 0.5) return null;
+                    let segFont = 9;
+                    if (viewBox) segFont = Math.max(8, Math.min(16, viewBox.w / 160));
+                    // Offset text slightly outward normal to segment for readability
+                    const dx = b[0]-a[0];
+                    const dy = b[1]-a[1];
+                    const segLen = Math.hypot(dx, dy) || 1;
+                    const nx = -dy/segLen; // normal
+                    const ny = dx/segLen;
+                    const offsetDist = segFont * 0.9; // scale offset by font size
+                    const tx = mid.x + nx * offsetDist;
+                    const ty = mid.y + ny * offsetDist;
+                    return (
+                      <g key={`len-${i}`} pointerEvents="none" transform={`rotate(${-angleDeg} ${tx} ${ty})`}>
+                        <text x={tx} y={ty} fontSize={segFont} fontFamily="monospace" textAnchor="middle" dominantBaseline="central" fill="#111827" stroke="#fff" strokeWidth={segFont/14} paintOrder="stroke">{lenFt.toFixed(1)}'</text>
+                      </g>
+                    );
+                  })}
                   {ring.map((p, pi) => (
                     <g key={pi}>
                       {/* visible tiny dot */}
@@ -1887,13 +2110,6 @@ export default function NaivePolygonEditor(props: {
                 </g>
                   );
                 })}
-        {/* pitch mode cursor overlay (always visible in pitch mode) */}
-        {mode==='pitch' && hoverPt && (
-                <g pointerEvents="none">
-          <circle cx={hoverPt.x} cy={hoverPt.y} r={3} fill="#111827" />
-          <text x={hoverPt.x + 8} y={hoverPt.y - 8} fill="#111827" fontSize={12} fontFamily="monospace" stroke="#fff" strokeWidth={0.8} paintOrder="stroke">{pitchValue}/12</text>
-                </g>
-              )}
               {/* in-progress drawing with crosshair overlay */}
               {drawing && (
                 <g>
@@ -1911,15 +2127,89 @@ export default function NaivePolygonEditor(props: {
                   {/* Removed large blue hover circle for clearer precise placement */}
                 </g>
               )}
+              {/* Pitch mode cursor overlay (inherits group rotation) */}
+              {mode==='pitch' && hoverPt && (
+                <g pointerEvents="none">
+                  <circle cx={hoverPt.x} cy={hoverPt.y} r={3} fill="#111827" />
+                  {/* Counter-rotate the text about the cursor so it stays upright */}
+                  <g transform={`rotate(${-angleDeg} ${hoverPt.x} ${hoverPt.y})`}>
+                    <text x={hoverPt.x + 8} y={hoverPt.y - 8} fill="#111827" fontSize={12} fontFamily="monospace" stroke="#fff" strokeWidth={0.8} paintOrder="stroke">{pitchValue}/12</text>
+                  </g>
+                </g>
+              )}
               </g>
               {/* Fixed crosshair overlay aligned with the grid (outside rotation) */}
-              {drawing && hoverPt && viewBox && (
+        {mode==='draw' && viewBox && (
                 (() => {
-                  const p = worldToOuter(hoverPt);
-                  return (
+          // Screen-space position base: prefer snapped hover point; else latest pointer; else view center
+          let pOuter = hoverPt ? worldToOuter(hoverPt) : (cursorOuter || { x: viewBox.x + viewBox.w/2, y: viewBox.y + viewBox.h/2 });
+                  // Collect outer-space vertices from all features and the current drawing
+                  const vertsOuter: { x: number; y: number }[] = [];
+                  for (const f of features) {
+                    for (const pt of f.geometry.coordinates[0]) {
+                      const o = worldToOuter({ x: pt[0], y: pt[1] });
+                      vertsOuter.push(o);
+                    }
+                  }
+                  if (drawing && drawing.points.length) {
+                    for (const pt of drawing.points) {
+                      const o = worldToOuter({ x: pt[0], y: pt[1] });
+                      vertsOuter.push(o);
+                    }
+                  }
+                  // Snap tolerance in pixels
+                  const SNAP_PX = 10;
+                  let guideX: number | null = null;
+                  let guideY: number | null = null;
+                  let bestDx = Infinity;
+                  let bestDy = Infinity;
+                  for (const v of vertsOuter) {
+                    const dx = Math.abs(v.x - pOuter.x);
+                    const dy = Math.abs(v.y - pOuter.y);
+                    if (dx < bestDx && dx <= SNAP_PX) { bestDx = dx; guideX = v.x; }
+                    if (dy < bestDy && dy <= SNAP_PX) { bestDy = dy; guideY = v.y; }
+                  }
+                  // Turn the corresponding long line green when aligned
+                  const colorX = guideX !== null; // vertical line color
+                  const colorY = guideY !== null; // horizontal line color
+                  const drawX = guideX ?? pOuter.x;
+                  const drawY = guideY ?? pOuter.y;
+          return (
                     <g pointerEvents="none">
-                      <line x1={viewBox.x} y1={p.y} x2={viewBox.x + viewBox.w} y2={p.y} stroke="#0ea5e9" strokeWidth={1} strokeDasharray="4 4" />
-                      <line x1={p.x} y1={viewBox.y} x2={p.x} y2={viewBox.y + viewBox.h} stroke="#0ea5e9" strokeWidth={1} strokeDasharray="4 4" />
+                      {/* Horizontal line */}
+                      <line
+                        x1={viewBox.x}
+                        y1={drawY}
+                        x2={viewBox.x + viewBox.w}
+                        y2={drawY}
+                        stroke={colorY ? '#10b981' : '#0ea5e9'}
+                        strokeWidth={1}
+                        strokeDasharray="4 4"
+                      />
+                      {/* Vertical line */}
+                      <line
+                        x1={drawX}
+                        y1={viewBox.y}
+                        x2={drawX}
+                        y2={viewBox.y + viewBox.h}
+                        stroke={colorX ? '#10b981' : '#0ea5e9'}
+                        strokeWidth={1}
+                        strokeDasharray="4 4"
+                      />
+                      {/* Small crosshair cursor locked at guide intersection (two-layer for contrast) */}
+                      {(() => {
+                        const r = Math.max(4, viewBox.w/700);
+                        return (
+                          <g>
+                            {/* outer dark */}
+                            <line x1={drawX - r} y1={drawY} x2={drawX + r} y2={drawY} stroke="#111827" strokeWidth={2} />
+                            <line x1={drawX} y1={drawY - r} x2={drawX} y2={drawY + r} stroke="#111827" strokeWidth={2} />
+                            {/* inner light */}
+                            <line x1={drawX - r} y1={drawY} x2={drawX + r} y2={drawY} stroke="#ffffff" strokeWidth={1} />
+                            <line x1={drawX} y1={drawY - r} x2={drawX} y2={drawY + r} stroke="#ffffff" strokeWidth={1} />
+                          </g>
+                        );
+                      })()}
                     </g>
                   );
                 })()

@@ -35,6 +35,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     name: contact.name,
     email: contact.email || '',
     phone: contact.phone || '',
+  // Primary pipeline lead id (most recent) for this contact, used by field app to prefill proposal app
+  leadId: lead?.id || null,
   flagColor: (contact as any).flagColor || null,
     town: property?.city || '',
     status: lead?.stage ? prettyStage(lead.stage) : '',
@@ -42,6 +44,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     assignedTo: (lead?.assignee?.email || lead?.assignee?.id || ''),
     notes: lead?.notes || '',
     contractPrice: lead?.contractPrice || null,
+  extrasJson: lead?.extrasJson || '[]',
     documents: docs,
     photos: photos,
   }

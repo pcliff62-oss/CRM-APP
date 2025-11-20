@@ -3,6 +3,8 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 import { formatPhone } from "@/components/utils";
+import { pricingBreakdownForLead } from '@/lib/jobs';
+import PricingLiveClient from './PricingLiveClient';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { revalidatePath } from "next/cache";
 import { DropZone, FileList, DocumentGrid, PhotoGrid } from "./UploadsClient";
@@ -101,18 +103,17 @@ export default async function CustomerDetail({ params }: { params: { id: string 
                 </div>
               </div>
             </div>
-            {typeof lead?.contractPrice === 'number' && isFinite(lead.contractPrice) && (
-              <div className="w-full">
-                <div className="inline-flex items-center gap-2 rounded-md bg-emerald-50 border border-emerald-200 px-2 py-1 text-emerald-800">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
-                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                    <path d="M22 4 12 14.01l-3-3" />
-                  </svg>
-                  <span className="font-semibold">Approved contract price:</span>
-                  <span className="tabular-nums">${lead.contractPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-              </div>
-            )}
+            {lead && (() => {
+              // Pricing breakdown (approved + extras)
+              // Note: server component so we can await directly
+              // We intentionally do not block entire header if this fails; fallback is base contract only.
+              return (
+                <>
+                  <PricingBanner leadId={lead.id} fallbackPrice={lead.contractPrice} />
+                  <PricingLiveClient leadId={lead.id} />
+                </>
+              );
+            })()}
           </div>
         </CardHeader>
   <CardContent className="p-5 grid md:grid-cols-3 gap-4 text-sm bg-gradient-to-br from-slate-50 via-gray-100 to-slate-200">
@@ -306,3 +307,47 @@ function DocUploads({ contactId, leadId }: { contactId: string; leadId: string |
 }
 
 // no folder grouping; "Documents" shown as a flat list
+
+// Server sub-component to render pricing breakdown banner
+async function PricingBanner({ leadId, fallbackPrice }: { leadId: string; fallbackPrice: number | null | undefined }) {
+  const breakdown = await pricingBreakdownForLead(leadId);
+  const base = breakdown.contractPrice !== null ? breakdown.contractPrice : (typeof fallbackPrice === 'number' ? fallbackPrice : null);
+  const extras = breakdown.extras;
+  const extrasTotal = breakdown.extrasTotal;
+  const grand = breakdown.grandTotal !== null ? breakdown.grandTotal : (base !== null ? base + extrasTotal : null);
+  if (base === null) return null;
+  return (
+    <div className="w-full">
+      <div className="inline-flex items-start gap-3 rounded-md bg-emerald-50 border border-emerald-200 px-3 py-2 text-emerald-800 flex-col sm:flex-row sm:items-center sm:gap-4">
+        <div className="inline-flex items-center gap-2">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+            <path d="M22 4 12 14.01l-3-3" />
+          </svg>
+          <span className="font-semibold">Approved contract price:</span>
+          <span className="tabular-nums">${base.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+        </div>
+        {extras.length > 0 && (
+          <div className="text-xs sm:text-sm space-y-1">
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              {extras.map((ex, i) => (
+                <div key={i} className="flex items-center gap-1 bg-white/70 rounded px-2 py-0.5 border border-emerald-200">
+                  <span className="text-emerald-700">{(ex.title || ex.name || `Extra ${i+1}`)}</span>
+                  {isFinite(Number(ex.price)) && (
+                    <span className="tabular-nums font-medium">${Number(ex.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="font-medium">
+              <span>Extras Total:</span> <span className="tabular-nums">{extrasTotal.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span>
+              {grand !== null && grand !== base && (
+                <span className="ml-3">Subtotal: <span className="tabular-nums font-semibold">{grand.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span></span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

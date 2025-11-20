@@ -54,6 +54,11 @@ export default function CustomersClient({ initial = [] as ContactCard[] }) {
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filtered.map((c) => {
           const latest = c.leads[0];
+          const stage = (latest?.stage||'').toUpperCase();
+          const base = (latest as any)?.contractPrice ?? null;
+          const extrasRaw = (latest as any)?.extrasJson || '[]';
+          const extrasSum = (()=>{ try { const arr = JSON.parse(extrasRaw); return Array.isArray(arr)? arr.reduce((s:number,x:any)=> s + (x && typeof x==='object'? Number(x.price||0):0),0):0 } catch { return 0 } })();
+          const total = base!==null ? base + extrasSum : null;
           return (
             <Card key={c.id}>
               <CardHeader className="p-0">
@@ -71,6 +76,11 @@ export default function CustomersClient({ initial = [] as ContactCard[] }) {
                 <div>{c.email ? <a href={`mailto:${c.email}`} className="text-blue-700 hover:underline">{c.email}</a> : "—"}</div>
                 <div>{c.phone ? <a href={`tel:${normalizeTel(c.phone)}`} className="text-blue-700 hover:underline">{formatPhone(c.phone)}</a> : "—"}</div>
                 <div>Address: {latest?.property?.address1 ?? "—"}</div>
+                {stage==='APPROVED' && base!==null && (
+                  <div className="text-xs mt-1">
+                    <span className="font-medium">Approved:</span> ${base.toFixed(0)}{extrasSum>0 && <> + Extras ${extrasSum.toFixed(0)} = <span className="font-semibold">${total!.toFixed(0)}</span></>}
+                  </div>
+                )}
               </CardContent>
             </Card>
           );

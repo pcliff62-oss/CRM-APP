@@ -1,4 +1,5 @@
 import prisma from "@/lib/db";
+import { pricingBreakdownForLead } from '@/lib/jobs';
 export const dynamic = "force-dynamic"; // force dynamic rendering
 export const revalidate = 0; // disable ISR caching
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,8 +30,20 @@ export default async function LeadsPage() {
     include: { contact: true, property: true },
     orderBy: { createdAt: "desc" }
   });
+  // Precompute pricing breakdown for APPROVED leads (N+1 acceptable for now; could batch later)
+  const breakdownMap: Record<string, { contractPrice: number | null; grandTotal: number | null; extrasTotal: number }> = {};
+  for (const l of leads) {
+    if (l.stage === 'APPROVED') {
+      const b = await pricingBreakdownForLead(l.id);
+      breakdownMap[l.id] = { contractPrice: b.contractPrice, grandTotal: b.grandTotal, extrasTotal: b.extrasTotal };
+    }
+  }
 
-  const approvedTotal = leads.filter((l: any) => l.stage === "APPROVED").reduce((sum: number, l: any) => sum + (l.contractPrice || 0), 0);
+  const approvedTotal = leads.filter((l: any) => l.stage === "APPROVED").reduce((sum: number, l: any) => {
+    const b = breakdownMap[l.id];
+    const val = b?.grandTotal !== null ? b.grandTotal : (l.contractPrice || 0);
+    return sum + val;
+  }, 0);
   const completedTotal = leads.filter((l: any) => l.stage === "COMPLETED").reduce((sum: number, l: any) => sum + (l.contractPrice || 0), 0);
   const invoicedTotal = leads.filter((l: any) => l.stage === "INVOICED").reduce((sum: number, l: any) => sum + (l.contractPrice || 0), 0);
   const stageTotals: Record<string, number> = { APPROVED: approvedTotal, COMPLETED: completedTotal, INVOICED: invoicedTotal };
@@ -67,9 +80,22 @@ export default async function LeadsPage() {
                       {lead.contact?.name || lead.title || 'Untitled Lead'}
                     </div>
                     {/* Price for approved jobs */}
-                    {s.key === 'APPROVED' && typeof lead.contractPrice === 'number' && !isNaN(lead.contractPrice) && (
-                      <div className="text-sm font-semibold text-emerald-600">${lead.contractPrice.toLocaleString()}</div>
-                    )}
+                    {s.key === 'APPROVED' && (() => {
+                      const b = breakdownMap[lead.id];
+                      if (!b) return null;
+                      const base = typeof b.contractPrice === 'number' && isFinite(b.contractPrice) ? b.contractPrice : null;
+                      const grand = b.grandTotal !== null ? b.grandTotal : base;
+                      if (grand === null) return null;
+                      const extras = b.extrasTotal;
+                      return (
+                        <div className="text-xs font-semibold text-emerald-700">
+                          {base !== null ? `$${base.toLocaleString()}` : ''}{extras > 0 && base !== null && (
+                            <> + ${extras.toLocaleString()} = <span className="text-emerald-600 text-sm">${grand.toLocaleString()}</span></>
+                          )}
+                          {extras > 0 && base === null && `$${grand.toLocaleString()}`}
+                        </div>
+                      );
+                    })()}
                     {/* Category (if present) */}
                     {lead.category ? (
                       <div className="text-xs text-slate-500">{lead.category}</div>

@@ -71,9 +71,12 @@ export default function AssignJobClient({ contactId, leadId, customerName, addre
                   {crews.map(c=> <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </label>
-              <label className="block text-sm">Start Date
-                <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="mt-1 w-full h-9 border rounded-md px-2" />
-              </label>
+              {/* Removed Start Date field for assigning crew to an existing scheduled job; still available when creating a brand new job */}
+              {!jobId && (
+                <label className="block text-sm">Start Date
+                  <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="mt-1 w-full h-9 border rounded-md px-2" />
+                </label>
+              )}
               <label className="block text-sm">Squares (optional){initialSquares!=null? ` (current: ${Number(initialSquares).toFixed(2)})`:''}
                 <input type="number" step="0.01" value={squares} onChange={e=>setSquares(e.target.value)} placeholder={initialSquares!=null? String(initialSquares): ''} className="mt-1 w-full h-9 border rounded-md px-2" />
               </label>

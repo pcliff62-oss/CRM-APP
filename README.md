@@ -55,6 +55,16 @@ NEXT_PUBLIC_MAP_STYLE=https://demotiles.maplibre.org/style.json
 - This starter is multi-tenant-ready (simple `tenantId` field). Add auth later (e.g., NextAuth or Supabase).
 - Proposal PDFs: start with in-browser print-to-PDF. Swap later to server PDF rendering if needed.
 
+### Pricing Breakdown (Approved + Extras)
+
+The customer contact card displays the approved contract price plus any extras line items. Extras are sourced from:
+
+1. `Lead.extrasJson` (sales-managed pre-job additions)
+2. Latest job `Appointment.extrasJson` (crew-added during job)
+
+Helper: `pricingBreakdownForLead(leadId)` in `src/lib/jobs.ts` returns `{ contractPrice, extras[], extrasTotal, grandTotal }`.
+Pipeline Approved column shows subtotal (contract + extras). A small polling client component keeps the banner current when field app updates occur.
+
 ## Map Component
 
 Google Maps satellite view is used for each property. A Street View toggle button now appears (if coverage exists within ~50m of the geocoded coordinate). Button states:
@@ -121,3 +131,111 @@ npm run dev
 ```
 
 The field app may also use `VITE_API_BASE` for calling a deployed API; set it in `.env.local` or `.env`.
+
+## Company Info Management
+
+Admins can now manage tenant-level company details under Settings > Company Info:
+
+- Name, phone, email
+- Address (lines 1 & 2, city, state, postal)
+- Logo upload (stored via existing `/api/upload` endpoint; path saved as `logoPath` on `Tenant`)
+- Licenses: dynamic list of `{ type, number, expires }` entries
+
+API:
+
+- `GET /api/company` returns `{ ok, item }`
+- `PUT /api/company` (ADMIN only) updates fields; validates email & phone formats
+
+Database additions (Prisma `Tenant` model): `phone`, `email`, `address1`, `address2`, `city`, `state`, `postal`, `logoPath`, `licensesJson`.
+
+Licenses are stored as JSON array in `licensesJson` and surfaced to the UI as editable rows.
+
+### Edit Mode & License Expiration
+
+- The Edit button only appears after initial data finishes loading to avoid editing stale placeholders.
+- Each license shows a status badge:
+  - `Expired` (red) when the expiration date is past.
+  - `Expiring (Nd)` (amber) when within 30 days.
+  - `Valid` (green) otherwise.
+- Badges update live as you change dates in edit mode.
+
+## AI Auto-Detect (Roof Planes)
+
+Experimental feature lets an external AI worker propose roof polygons automatically when opening the measurement tool.
+
+### Setup
+
+1. Run / deploy the Python worker in `ai_worker/` (FastAPI):
+
+```bash
+cd ai_worker
+python -m venv .venv-ai-worker
+source .venv-ai-worker/bin/activate
+pip install -r requirements.txt
+python main.py  # starts on :8089 by default
+```
+
+2. Configure the CRM to reach it by adding to `.env.local` (or environment):
+
+```
+AI_WORKER_URL=http://localhost:8089
+```
+
+3. Restart `npm run dev` so Next.js picks up the variable.
+
+### Using
+
+Inside the measurement UI (polygon editor):
+
+- Click `AI Detect` to fetch predictions (`/api/measurements/:id/auto-detect`). Existing AI predictions are replaced; manual polygons are preserved.
+- Click `Clear AI` to remove only AI predicted polygons (those with `properties.source === 'ai'`).
+- Click `Save` after making corrections; the client sends a diff of changed geometry / edge labels to `/api/measurements/:id/ai-feedback` for future model improvement.
+
+### Endpoints
+
+- `POST /api/measurements/:id/auto-detect` -> `{ features: Feature[], raw }`
+- `POST /api/measurements/:id/ai-feedback` -> `{ ok, count }`
+- `GET  /api/measurements/:id/ai-feedback` (dev only) -> collected feedback records
+
+### Feature Object Shape (subset)
+
+```ts
+interface Feature {
+  type: "Feature";
+  properties: {
+    id?: string;
+    pitch?: number; // initial guess (default 6/12)
+    edges?: { i: number; type: string }[]; // all initially 'unknown'
+    source?: "ai"; // present only for AI predicted facets
+    layerId?: string;
+  };
+  geometry: { type: "Polygon"; coordinates: number[][][] }; // single outer ring
+}
+```
+
+### Feedback Diff Logic
+
+On save, the editor compares every original AI facet (geometry hash + edge labels) with the current non-ai facets. If a corresponding facet's geometry or any edge label changed, a record is posted containing:
+
+```json
+{
+  "aiFeatureId": "P1",
+  "geometryChanged": true,
+  "edgeDiff": [ { "i": 0, "from": "unknown", "to": "eave" } ],
+  "updatedFeature": { ...full feature object... }
+}
+```
+
+These corrections will seed a future training pipeline (not implemented here). Replace the in-memory store with a persistent table for production.
+
+### Improving the Worker
+
+The current worker uses heuristic segmentation (GrabCut + vegetation masking + Hough line splits + contour polygonization). For higher accuracy you can:
+
+- Integrate a roof plane segmentation model (Mask R-CNN / Segment Anything + post-processing).
+- Add line refinement to merge nearly collinear edges and orthogonal snapping.
+- Predict edge types with a small classifier using angle + adjacency context.
+
+### Safety / Fallbacks
+
+If the worker or env var is missing, `AI Detect` returns an error and no polygons are added; manual drawing continues unaffected.

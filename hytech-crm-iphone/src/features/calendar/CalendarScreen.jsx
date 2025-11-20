@@ -197,7 +197,9 @@ export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, r
                         <span className="inline-block w-1.5 h-1.5 rounded-full mt-1 bg-emerald-500" />
                         <div className="flex-1">
                           <div className="font-medium leading-snug">
-                            {(it.job || it.type==='install') ? (it.customerName || 'Job') : (it.title || 'Appt')}{(it.job || it.type==='install') && (it.workType || it.title) ? ` — ${it.workType || it.title}` : ''}
+                            {(it.job || it.type==='install') ? (it.customerName || 'Job') : (it.title || 'Appt')}
+                            {(it.job || it.type==='install') && Number.isFinite(Number(it.squares)) && Number(it.squares) > 0 ? ` • ${Number(it.squares).toFixed(2)} sq` : ''}
+                            {(it.job || it.type==='install') && (it.workType || it.title) ? ` — ${it.workType || it.title}` : ''}
                           </div>
                           {it.address ? (
                             <a
@@ -250,7 +252,10 @@ export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, r
                   >
                     <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 border border-neutral-200">{(a.type||'other').replace('_',' ')}</span>
                     <div className="flex-1">
-                      <div className="font-medium leading-snug">{a.title || 'Untitled'}</div>
+                      <div className="font-medium leading-snug">
+                        {a.title || 'Untitled'}
+                        {(a.job || a.type==='install') && Number.isFinite(Number(a.squares)) && Number(a.squares) > 0 ? ` • ${Number(a.squares).toFixed(2)} sq` : ''}
+                      </div>
                       <div className="text-xs text-neutral-500 leading-snug mt-0.5">
                         {new Date(a.when).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}
                         {a.location ? (

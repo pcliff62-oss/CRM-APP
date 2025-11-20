@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import MobileShell from './ui/MobileShell.jsx'
 import Today from './features/dashboard/Today.jsx'
 import CalendarScreen from './features/calendar/CalendarScreen.jsx'
@@ -44,13 +44,15 @@ export default function App() {
   const [customers, setCustomers] = useState([])
   const [leads, setLeads] = useState([])          // my leads (assigned)
   const [allLeads, setAllLeads] = useState([])    // pipeline leads (all)
-  const [view, setView] = useState({ id: 'home' }) // 'home' | 'appt-edit' | 'customer-detail' | 'jobs-list' | 'leads-list' | 'documents' | 'photos' | 'file-viewer' | 'measure-editor'
+  const [view, setView] = useState({ id: 'home' }) // 'home' | 'appt-edit' | 'customer-detail' | 'jobs-list' | 'leads-list' | 'documents' | 'photos' | 'file-viewer' | 'measure-editor' | 'proposal-embed'
   const [draft, setDraft] = useState(null)
   const [fileCtx, setFileCtx] = useState({ list: [], file: null })
   const [measureCtx, setMeasureCtx] = useState({ id: null, imageSrc: '', features: [], gsdMPerPx: null })
   const [crewSelectedDay, setCrewSelectedDay] = useState('')
   const [pastJobs, setPastJobs] = useState([])
   const [showPastJobs, setShowPastJobs] = useState(false)
+  const [newLeadOpen, setNewLeadOpen] = useState(false)
+  const [newLead, setNewLead] = useState({ name:'', email:'', phone:'', address:'', notes:'', date: '', time: '', category:'', customScope:'', userId:'' })
 
   // load CRM users list
   useEffect(() => {
@@ -147,6 +149,12 @@ export default function App() {
   // When tapping an appointment in the calendar, open the related customer/contact
   const onOpenApptCustomer = async (a) => {
     if (!a) return
+    // Crew role restriction: if item is a job, open crew job detail instead of customer card
+    if (role === 'CREW' && (a.job || a.type === 'install')) {
+      setDraft(a)
+      setView({ id: 'crew-job' })
+      return
+    }
     try {
       const targetId = a.contactId || a.customerId
       const full = targetId ? await fetchCustomer(targetId) : null
@@ -194,6 +202,18 @@ export default function App() {
     if (found?.role && found.role !== role) setRole(found.role)
   }, [users, user.id])
 
+  useEffect(()=>{ if (newLeadOpen && !newLead.date) { const d=new Date(); setNewLead(l=>({ ...l, date: d.toISOString().slice(0,10), time: nextHalfHour() })) } }, [newLeadOpen])
+  const halfHours = useMemo(()=> halfHourIncrements('07:00','17:00'), [])
+  async function submitNewLead() {
+    try {
+      const startIso = new Date(`${newLead.date}T${newLead.time}:00`).toISOString();
+      const endIso = new Date(new Date(`${newLead.date}T${newLead.time}:00`).getTime()+60*60*1000).toISOString();
+      const payload = { name: newLead.name, email: newLead.email||null, phone: newLead.phone||null, address: newLead.address, notes: newLead.notes||null, category: newLead.category||null, customScope: newLead.category==='Other'? (newLead.customScope||null): null, userId: newLead.userId || null, start: startIso, end: endIso }
+      const res = await fetch('/api/new-lead', { method:'POST', body: JSON.stringify(payload) })
+      if (res.ok) { setNewLeadOpen(false); alert('Lead created.'); window.location.reload() }
+    } catch (e) { alert(String(e)) }
+  }
+
   return (
     <MobileShell
       title="HyTech CRM"
@@ -203,6 +223,73 @@ export default function App() {
       showPlus={tab==='calendar' || tab==='customers'}
     >
       <div className="p-4 space-y-5">
+        {/* New Lead button (ADMIN/SALES only) */}
+        {view.id==='home' && (role==='ADMIN' || role==='SALES') && (
+          <div className="flex justify-end">
+            <button onClick={()=> setNewLeadOpen(true)} className="h-9 px-4 rounded-md bg-emerald-600 text-white text-sm font-medium shadow hover:bg-emerald-700">New Lead</button>
+          </div>
+        )}
+        {/* Modal */}
+        {newLeadOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={()=> setNewLeadOpen(false)} />
+            <div className="relative bg-white rounded-lg shadow-xl w-full max-w-xl p-5 space-y-4">
+              <div className="text-lg font-semibold">New Lead</div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="col-span-2">
+                  <label className="text-xs text-neutral-600">Full name</label>
+                  <input className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.name} onChange={e=> setNewLead(l=>({ ...l, name: e.target.value }))} />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-xs text-neutral-600">Address</label>
+                  <input className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.address} onChange={e=> setNewLead(l=>({ ...l, address: e.target.value }))} placeholder="123 Main St, City ST" />
+                </div>
+                <div>
+                  <label className="text-xs text-neutral-600">Phone</label>
+                  <input className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.phone} maxLength={14} onChange={e=> setNewLead(l=>({ ...l, phone: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-xs text-neutral-600">Email</label>
+                  <input className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.email} onChange={e=> setNewLead(l=>({ ...l, email: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-xs text-neutral-600">Category</label>
+                  <select className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.category} onChange={e=> setNewLead(l=>({ ...l, category: e.target.value }))}>
+                    <option value="">Select…</option>
+                    <option>roof replacement</option>
+                    <option>Siding replacement</option>
+                    <option>Repair</option>
+                    <option>Other</option>
+                  </select>
+                </div>
+                {newLead.category==='Other' && (
+                  <div>
+                    <label className="text-xs text-neutral-600">Specify scope</label>
+                    <input className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.customScope} onChange={e=> setNewLead(l=>({ ...l, customScope: e.target.value }))} />
+                  </div>
+                )}
+                <div>
+                  <label className="text-xs text-neutral-600">Date</label>
+                  <input type="date" className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.date} onChange={e=> setNewLead(l=>({ ...l, date: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-xs text-neutral-600">Time</label>
+                  <select className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.time} onChange={e=> setNewLead(l=>({ ...l, time: e.target.value }))}>
+                    {halfHours.map(t=> <option key={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-xs text-neutral-600">Notes</label>
+                  <input className="mt-1 h-9 px-2 rounded border border-neutral-300 w-full" value={newLead.notes} onChange={e=> setNewLead(l=>({ ...l, notes: e.target.value }))} />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={()=> setNewLeadOpen(false)} className="h-9 px-4 rounded-md border border-neutral-300 bg-white text-neutral-700 text-sm">Cancel</button>
+                <button onClick={submitNewLead} className="h-9 px-4 rounded-md bg-emerald-600 text-white text-sm font-medium">Create Lead</button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* User selector */}
         <div className="flex items-center gap-2">
           <select
@@ -655,6 +742,13 @@ export default function App() {
                 setView({ id: 'measure-editor' })
               } catch (e) { alert(e?.message || String(e)) }
             }}
+            onCreateQuote={({ leadId }) => {
+              const NEXT_BASE = (import.meta.env.VITE_NEXT_BASE || '').trim()
+              const NEXT_PORT = (import.meta.env.VITE_NEXT_PORT || '3000').trim()
+              const base = NEXT_BASE || `http://127.0.0.1:${NEXT_PORT}`
+              const url = `${base}/proposal-app/?lead=${encodeURIComponent(leadId)}`
+              setView({ id: 'proposal-embed', url })
+            }}
           />
         )}
         {view.id==='crew-job' && (
@@ -697,6 +791,14 @@ export default function App() {
             onBack={()=>{ setView({ id:'customer-detail' }) }}
           />
         )}
+        {view.id==='proposal-embed' && (
+          <div className="space-y-3">
+            <button onClick={()=>setView({ id:'customer-detail' })} className="px-3 py-2 text-sm rounded-lg border border-neutral-200 bg-white active:bg-neutral-50">← Back</button>
+            <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
+              <iframe src={view.url} title="HyTech Proposal" className="w-full h-[70vh]" />
+            </div>
+          </div>
+        )}
         {view.id==='documents' && (
           <div className="space-y-3">
             <button onClick={()=>setView({ id:'customer-detail' })} className="px-3 py-2 text-sm rounded-lg border border-neutral-200 bg-white active:bg-neutral-50">← Back</button>
@@ -716,3 +818,6 @@ export default function App() {
     </MobileShell>
   )
 }
+// helper functions for time choices
+function nextHalfHour() { const d=new Date(); d.setMinutes(d.getMinutes()<30?30:60,0,0); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}` }
+function halfHourIncrements(start,end){ const [sh,sm]=start.split(':').map(Number); const [eh,em]=end.split(':').map(Number); const out=[]; for(let h=sh; h<=eh; h++){ for(const m of [0,30]){ if(h===sh && m<sm) continue; if(h===eh && m>em) continue; out.push(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`) } } return out }

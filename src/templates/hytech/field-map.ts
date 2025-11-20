@@ -205,6 +205,7 @@ export function mapSnapshotToWeb(snapshot: any) {
 
   // Flatten commonly-used sources so template tokens can bind without code changes
   addAliases(primary, "primaryTotals");
+  addAliases(computed?.sidingTotals || {}, "sidingTotals");
   addAliases(snapshot?.pricing?.cedarShake, "cedarShake");
   addAliases(snapshot?.pricing?.cedar, "cedar");
   addAliases(snapshot?.pricing?.roofing, "roofing");
