@@ -435,10 +435,6 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
       const cats = (selectedWork?.sidingCategories || []) as string[];
       return cats.includes(c) || selectedWork?.sidingCategory === c;
     };
-    const syntheticOn = !!workDomain?.siding && catPicked("synthetic");
-    const cedarOn = !!workDomain?.siding && catPicked("cedarShake");
-    const vinylOn = !!workDomain?.siding && catPicked("vinyl");
-    const clapOn = !!workDomain?.siding && catPicked("clapBoard");
   const syn = (pricing?.siding?.byCategory?.synthetic || pricing?.siding?.synthetic || pricing?.siding || {}) as AnyDict;
   const cedar = (pricing?.siding?.byCategory?.cedarShake || pricing?.siding?.cedarShake || {}) as AnyDict;
   const vinyl = (pricing?.siding?.byCategory?.vinyl || pricing?.siding?.vinyl || {}) as AnyDict;
@@ -479,6 +475,10 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
   const cedarSubtotal = readSubtotal("cedarShake", cedar);
   const vinylSubtotal = readSubtotal("vinyl", vinyl);
   const clapSubtotal = readSubtotal("clapBoard", clap);
+  const syntheticOn = ((workDomain?.siding ? catPicked("synthetic") : false) || syntheticSubtotal > 0);
+  const cedarOn = ((workDomain?.siding ? catPicked("cedarShake") : false) || cedarSubtotal > 0);
+  const vinylOn = ((workDomain?.siding ? catPicked("vinyl") : false) || vinylSubtotal > 0);
+  const clapOn = ((workDomain?.siding ? catPicked("clapBoard") : false) || clapSubtotal > 0);
     Object.assign(data, {
       // Scope generic {siding_total}/{siding_subtotal} within this section by providing overrides in the array item
       show_siding_synthetic: syntheticOn ? [{

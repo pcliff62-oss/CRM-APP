@@ -1162,6 +1162,28 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           vinyl:     sidingMat ? /vinyl/.test(sidingMat)     : (pricing?.sidingVinyl?.selected ?? null),
           clapboard: sidingMat ? /(clap\s*board|clapboard)/.test(sidingMat) : (pricing?.sidingClapboard?.selected ?? null),
         };
+        const sectionHasPrice = (tbl: HTMLElement): boolean => {
+          try {
+            const parse = (raw: string | undefined | null) => {
+              if (!raw) return 0;
+              const n = Number(String(raw).replace(/[^0-9.\-]/g, ''));
+              return Number.isFinite(n) ? n : 0;
+            };
+            const dsHits = Array.from(tbl.querySelectorAll('[data-amount],[data-total],[data-subtotal]'))
+              .some((el) => {
+                const ds = (el as HTMLElement).dataset || {};
+                return [parse(ds.amount), parse(ds.total), parse(ds.subtotal)].some((n) => n > 0);
+              });
+            if (dsHits) return true;
+            const moneyRe = /\$[\s\S]{0,40}?([0-9][0-9,]*(?:\.[0-9]{2})?)/g;
+            const txt = tbl.textContent || '';
+            let m: RegExpExecArray | null;
+            while ((m = moneyRe.exec(txt))) {
+              if (parse(m[1]) > 0) return true;
+            }
+          } catch {}
+          return false;
+        };
         const extrasSel: Record<string, boolean | null> = {
           plywood:   pricing?.plywood?.selected ?? null,
           chimney:   pricing?.chimney?.selected ?? null,
@@ -1214,6 +1236,21 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           return null;
         };
         const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
+        // Helper: detect whether a table already contains priced data (positive $ amounts or price pills)
+        const hasPricedData = (tbl: HTMLElement): boolean => {
+          // Any existing price-choice labels or proposal-price-checkbox inputs
+          const pills = tbl.querySelector('label.price-choice');
+          const inputs = tbl.querySelector('input.proposal-price-checkbox');
+          if (pills || inputs) return true;
+          // Look for a positive dollar amount in text content
+          const txt = (tbl.textContent || '');
+          const m = txt.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/);
+          if (m) {
+            const n = Number((m[1] || '').replace(/[^0-9.\-]/g, ''));
+            if (isFinite(n) && n > 0) return true;
+          }
+          return false;
+        };
         for (const tbl of tables) {
           if (isLegalOrSignature(tbl)) continue;
           const key = detectKey(tbl);
@@ -1229,19 +1266,24 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             }
           } catch {}
           let show: boolean | null = null;
+          const hasPrice = sectionHasPrice(tbl as HTMLElement);
           if (key.startsWith('roofing:')) {
-            if (workSel.roofing === false) show = false;
+            if (workSel.roofing === false) show = hasPrice ? true : false;
             else if (workSel.roofing === true) {
               const sub = key.split(':')[1];
               const subSel = roofingSel[sub];
-              if (subSel === true) show = true; else if (subSel === false) show = false; else show = null;
+              if (subSel === true) show = true; else if (subSel === false) show = hasPrice ? true : false; else show = null;
+            } else if (hasPrice) {
+              show = true;
             }
           } else if (key.startsWith('siding:')) {
-            if (workSel.siding === false) show = false;
+            if (workSel.siding === false) show = hasPrice ? true : false;
             else if (workSel.siding === true) {
               const sub = key.split(':')[1];
               const subSel = sidingSel[sub];
-              if (subSel === true) show = true; else if (subSel === false) show = false; else show = null;
+              if (subSel === true) show = true; else if (subSel === false) show = hasPrice ? true : false; else show = null;
+            } else if (hasPrice) {
+              show = true;
             }
           } else if (key === 'decking') {
             show = workSel.decking ? true : (workSel.decking === false ? false : null);
@@ -1255,6 +1297,10 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             const flag = extrasSel[sub as keyof typeof extrasSel];
             // Strict per-section gating for all extras (no special cases)
             show = (flag === true) ? true : (flag === false ? false : null);
+          }
+          // Override: keep sections visible if they already contain priced data to prevent hiding pills/totals
+          if (show === false && hasPricedData(tbl)) {
+            show = true;
           }
           if (show === true || show === false) {
             (tbl as HTMLElement).style.display = show ? '' : 'none';
@@ -2563,9 +2609,16 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         const debug: Array<{section: string; amount: number; tables: number}> = [];
         for (const sec of SECTIONS) {
           const amt = Number((amounts as any)[sec.key] || 0);
+          // Find tables even if currently hidden; totals should still be emitted when data exists
           const tables = findSectionTables(sec.key as any);
           debug.push({ section: sec.key, amount: amt, tables: tables.length });
           for (const tbl of tables) {
+            // If a section table is hidden but has a positive subtotal, unhide to show totals and pills
+            try {
+              if (amt > 0 && (tbl as HTMLElement).style.display === 'none') {
+                (tbl as HTMLElement).style.display = '';
+              }
+            } catch {}
             const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
             let totalRow: HTMLTableRowElement | null = rows.find(r => /TOTAL\s+INVESTMENT\s*:/i.test(r.textContent || '')) || null;
             const colCount = Math.max(1, ...rows.map(r => Array.from(r.querySelectorAll('td,th')).length), 1);
@@ -2616,6 +2669,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
                 pill.appendChild(input);
               }
               input.setAttribute('data-amount', String(amt));
+              // Mark authority for consistent handling
+              try { (totalRow as HTMLElement).setAttribute('data-siding-total-row', '1'); } catch {}
+              try { (td as HTMLElement).setAttribute('data-siding-total', '1'); } catch {}
             }
             totalRow.appendChild(td);
             // Ensure no Trim markers remain on this row/cell that could force left alignment or strip pills
