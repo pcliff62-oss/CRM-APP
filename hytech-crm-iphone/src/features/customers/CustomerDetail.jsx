@@ -1,10 +1,10 @@
-import React, { useMemo, useState } from 'react'
-import { fetchCrews, assignJob, submitJob, upsertAppointment } from '../../lib/api.js'
+import React, { useMemo, useState, useEffect } from 'react'
+import { fetchCrews, assignJob, submitJob, upsertAppointment, createSalesPaymentRequest } from '../../lib/api.js'
 
 // Allow parent to open Measure flow
 // Props extended: onStartMeasure?: (opts:{ address?: string|null })=>Promise<void> | void
 
-export default function CustomerDetail({ initial, onSave, onCancel, onDelete, appts = [], onOpenDocuments, onOpenPhotos, onStartMeasure, onCreateQuote, role = 'ADMIN' }) {
+export default function CustomerDetail({ initial, onSave, onCancel, onDelete, appts = [], onOpenDocuments, onOpenPhotos, onStartMeasure, onCreateQuote, role = 'ADMIN', commissionPercentUser }) {
   const seed = useMemo(() => ({
     id: initial?.id,
   name: initial?.name || initial?.customerName || '',
@@ -36,6 +36,7 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
   const [showApptList, setShowApptList] = useState(false)
   const [showComplete, setShowComplete] = useState(false)
   const [showAssign, setShowAssign] = useState(false)
+  const [showProposal, setShowProposal] = useState(false)
   const jobAppt = useMemo(() => (thisAppts || []).find(a => a.job) || null, [thisAppts])
   const parsedExtras = useMemo(() => {
     // Sales-managed extras: use lead extrasJson if no job extras
@@ -61,10 +62,48 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
     String(form.status || '').toUpperCase() === 'APPROVED' &&
     (form.contractPrice ?? null) !== null
   const priceLabel = approvedWithPrice ? ` — ${formatUSD(form.contractPrice)}` : ''
+  // Build customer payload for proposal app
+  const customerPayload = useMemo(()=> ({
+    type: 'hytech-proposal-customer',
+    customer: {
+      name: initial?.name || initial?.customerName || '',
+      tel: initial?.phone || '',
+      cell: initial?.phone || '',
+      email: initial?.email || '',
+      street: initial?.address || '',
+      city: initial?.town || '',
+      state: '',
+      zip: '',
+      providedOn: new Date().toISOString().slice(0,10)
+    }
+  }), [initial?.name, initial?.customerName, initial?.phone, initial?.email, initial?.address, initial?.town])
+  useEffect(()=>{
+    if (!showProposal) return
+    const iframe = document.getElementById('proposal-iframe')
+    if (!iframe) return
+    // Delay postMessage slightly to allow iframe to load
+    const t = setTimeout(()=>{
+      try { iframe.contentWindow?.postMessage(customerPayload, '*') } catch {}
+    }, 800)
+    return ()=> clearTimeout(t)
+  }, [showProposal, customerPayload])
   return (
     <div className="space-y-4">
-      {/* Title */}
-      <div className="text-xl font-semibold">{form.name || 'Customer'}</div>
+  {/* Top bar: title on left; Back on right */}
+      <div className="flex items-center justify-between">
+        <div className="text-xl font-semibold truncate">{form.name || 'Customer'}</div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-9 px-3 rounded-lg border border-neutral-300 bg-white text-sm"
+            aria-label="Back"
+          >
+            Back
+          </button>
+        </div>
+      </div>
+  {/* Title moved to top bar */}
 
       {/* Location map + navigation (shown only if address available) */}
       {form.address ? (
@@ -142,7 +181,7 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
   {/* Prioritized actions at top */}
   <Tile label="Measure" count={counts.measurements} icon="📏" onClick={()=> onStartMeasure?.({ address: form.address || null })} />
         <Tile
-          label="Create Quote"
+          label="Create Proposal"
           count={counts.estimates}
           icon="📄"
           onClick={()=> {
@@ -151,7 +190,7 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
               alert('No lead available to prefill. Create or select a lead first.')
               return
             }
-            onCreateQuote?.({ leadId })
+            setShowProposal(true)
           }}
         />
 
@@ -161,7 +200,13 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
         )}
         {/* Complete job (non-crew) */}
         {role !== 'CREW' && (
-          <Tile label="Complete Job" count={0} icon="✅" onClick={()=> setShowComplete(true)} />
+          <Tile
+            label="Complete Job"
+            count={0}
+            icon="✅"
+            onClick={()=> { if (approvedWithPrice) setShowComplete(true) }}
+            disabled={!approvedWithPrice}
+          />
         )}
 
         {/* Remaining actions */}
@@ -277,7 +322,7 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
           <CompleteJobModal
             customer={form}
             extras={extras}
-            commissionPercent={deriveCommissionPercent(initial) /* may read from settings; fallback inside fn */}
+            commissionPercent={normalizePercent(commissionPercentUser) ?? deriveCommissionPercent(initial)}
             onClose={()=>setShowComplete(false)}
             onSubmit={async ()=>{
               // Persist completion (optional enhancement): submit job data similar to legacy CompleteJobForm
@@ -285,48 +330,37 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
                 const appt = (Array.isArray(initial?.appointments)? initial.appointments: [])?.find?.(a=>a.job)
                 const id = appt?.id || ''
                 const extraItems = extras.map((it,i)=> ({ id:`ex-${i}`, title:it.title, price:Number(it.price)||0 }))
+                let submitted
                 if (id) {
-                  await submitJob(id, { extras: extraItems, attachments: [] })
+                  submitted = await submitJob(id, { extras: extraItems, attachments: [] })
                 }
                 // Fire sales payment request (simplified: always use assignee/user name)
-                const commissionPercent = deriveCommissionPercent(initial)
+                const commissionPercent = normalizePercent(commissionPercentUser) ?? deriveCommissionPercent(initial)
                 const contractPrice = Number(initial?.contractPrice ?? 0) || 0
                 const extrasSum = extraItems.reduce((s,x)=> s + (Number(x.price)||0), 0)
                 const grandTotal = contractPrice + extrasSum
                 const amount = grandTotal * (commissionPercent/100)
-                let salesUserId = initial?.assignee?.id || initial?.assigneeId || initial?.user?.id || initial?.userId || undefined
-                let salesUserName = initial?.assignee?.name || initial?.user?.name || undefined
-                // Fallback: if we have no userId, attempt to pull first SALES user
-                if (!salesUserId) {
-                  try {
-                    const resSales = await fetch('/api/users?role=SALES', { cache:'no-store' })
-                    const sj = await resSales.json().catch(()=>({ items:[] }))
-                    const first = Array.isArray(sj.items)? sj.items[0]: null
-                    if (first?.id) salesUserId = first.id
-                    if (!salesUserName && first?.name) salesUserName = first.name
-                  } catch {}
-                }
-                // Do not block if name missing; backend will enrich from salesUserId
-                if (!salesUserId) {
-                  try { window.alert('Sales user id missing; cannot submit payment request yet.') } catch {}
-                  return
-                }
                 const payload = {
+                  // Provide identifiers so backend can link and jobs card can resolve latest SPR
+                  leadId: initial?.leadId || undefined,
                   appointmentId: id || undefined,
-                  salesUserId: salesUserId || undefined,
-                  salesUserName,
                   customerName: initial?.name || initial?.customerName || 'Customer',
                   address: initial?.address || '',
+                  // Send base contract price explicitly to populate SalesCommissionBox "Contract Price"
+                  contractPrice,
                   grandTotal,
                   commissionPercent,
                   amount,
                   extrasJson: JSON.stringify(extraItems)
                 }
-                await fetch('/api/sales-payment-requests', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload) }).catch(()=>{})
-                // Move pipeline stage to COMPLETED if lead exists
-                if (initial?.leadId) {
-                  fetch('/api/leads', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ id: initial.leadId, stage: 'COMPLETED' }) }).catch(()=>{})
-                }
+                await createSalesPaymentRequest(payload).catch(()=>{})
+                // Sales fallback: also request pipeline move; server enforces role (SALES/ADMIN/MANAGER only)
+                try {
+                  const leadId = initial?.leadId || initial?.id || submitted?.customerId || submitted?.contactId
+                  if (leadId) {
+                    await fetch('/api/leads', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ id: leadId, stage:'COMPLETED' }) })
+                  }
+                } catch {}
                 if (typeof window !== 'undefined') {
                   try { window.alert('Payment request submitted') } catch {}
                 }
@@ -335,6 +369,27 @@ export default function CustomerDetail({ initial, onSave, onCancel, onDelete, ap
             }}
           />
         </Modal>
+      )}
+      {showProposal && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={()=> setShowProposal(false)}>
+          <div className="bg-white w-full max-w-4xl h-[80vh] rounded-xl overflow-hidden shadow-xl flex flex-col" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-2 border-b">
+              <div className="font-semibold text-sm">Proposal Builder</div>
+              <button onClick={()=> setShowProposal(false)} className="text-neutral-500 text-sm">✕</button>
+            </div>
+            <iframe
+              id="proposal-iframe"
+              title="Proposal App"
+              src={(() => {
+                const leadId = initial?.leadId || ''
+                const base = '/proposal-app'
+                return leadId ? `${base}/?lead=${encodeURIComponent(leadId)}` : base
+              })()}
+              className="flex-1 w-full border-0"
+              sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+            />
+          </div>
+        </div>
       )}
     </div>
   )
@@ -384,6 +439,11 @@ function deriveCommissionPercent(customerInitial) {
     if (typeof percent === 'number' && isFinite(percent) && percent > 0) return percent
   } catch {}
   return 10 // default 10%
+}
+
+function normalizePercent(v){
+  const n = Number(v)
+  return (Number.isFinite(n) && n > 0) ? n : null
 }
 
 function CompleteJobModal({ customer, extras = [], commissionPercent = 10, onClose, onSubmit }) {

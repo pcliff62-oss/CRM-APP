@@ -8,7 +8,7 @@ import { formatPhone } from "@/components/utils";
 interface Props { initialDate: string; initialTime: string; onCreated?: () => void; }
 
 export default function NewLeadInline({ initialDate, initialTime, onCreated }: Props) {
-  const [users, setUsers] = useState<Array<{ id: string; name: string }>>([]);
+  const [users, setUsers] = useState<Array<{ id: string; name: string; role: string; calendarColor: string | null }>>([]);
   const [form, setForm] = useState({
     name: "", email: "", phone: "", address: "", notes: "", category: "", customScope: "", userId: "", date: initialDate, time: initialTime
   });
@@ -21,8 +21,8 @@ export default function NewLeadInline({ initialDate, initialTime, onCreated }: P
     if (!r.ok) return;
     const d = await r.json().catch(()=>({ items: [] }));
     const items = Array.isArray(d?.items) ? d.items : (Array.isArray(d) ? d : []);
-    const allowed = items.filter((u: any) => ['SALES','ADMIN'].includes(String(u.role||'').toUpperCase()));
-    setUsers(allowed.map((u: any) => ({ id: u.id, name: u.name || u.email })));
+  const allowed = items.filter((u: any) => ['SALES','ADMIN','MANAGER'].includes(String(u.role||'').toUpperCase()));
+  setUsers(allowed.map((u: any) => ({ id: u.id, name: u.name || u.email, role: String(u.role||'').toUpperCase(), calendarColor: u.calendarColor || null })));
   })(); }, []);
 
   useEffect(() => {
@@ -102,21 +102,16 @@ export default function NewLeadInline({ initialDate, initialTime, onCreated }: P
           <Input value={form.email} onChange={e=>setForm({...form,email:e.target.value})} />
         </div>
         <div>
-          <label className="text-xs text-slate-500">Category</label>
-          <Select value={form.category} onChange={v=>setForm({...form,category:v})}>
-            <option value="">Select…</option>
-            <option>roof replacement</option>
-            <option>Siding replacement</option>
-            <option>Repair</option>
-            <option>Other</option>
+          <label className="text-xs text-slate-500">Assign to</label>
+          <Select value={form.userId} onChange={v=>setForm({...form,userId:v})}>
+            <option value="">Me</option>
+            {users.filter(u => ['ADMIN','SALES','MANAGER'].includes(u.role))
+              .map(u => {
+                const dot = u.calendarColor && /^#?[0-9a-fA-F]{6}$/.test(u.calendarColor) ? '● ' : '';
+                return <option key={u.id} value={u.id}>{dot}{u.name}</option>;
+              })}
           </Select>
         </div>
-        {form.category === 'Other' && (
-          <div>
-            <label className="text-xs text-slate-500">Specify scope</label>
-            <Input value={form.customScope} onChange={e=>setForm({...form,customScope:e.target.value})} />
-          </div>
-        )}
         <div>
           <label className="text-xs text-slate-500">Date</label>
           <Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} required />
@@ -128,12 +123,21 @@ export default function NewLeadInline({ initialDate, initialTime, onCreated }: P
           </Select>
         </div>
         <div className="col-span-2">
-          <label className="text-xs text-slate-500">Assign to</label>
-          <Select value={form.userId} onChange={v=>setForm({...form,userId:v})}>
-            <option value="">Me</option>
-            {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          <label className="text-xs text-slate-500">Category</label>
+          <Select value={form.category} onChange={v=>setForm({...form,category:v})}>
+            <option value="">Select…</option>
+            <option>roof replacement</option>
+            <option>Siding replacement</option>
+            <option>Repair</option>
+            <option>Other</option>
           </Select>
         </div>
+        {form.category === 'Other' && (
+          <div className="col-span-2">
+            <label className="text-xs text-slate-500">Specify scope</label>
+            <Input value={form.customScope} onChange={e=>setForm({...form,customScope:e.target.value})} />
+          </div>
+        )}
         <div className="col-span-2">
           <label className="text-xs text-slate-500">Notes</label>
           <Input value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} />

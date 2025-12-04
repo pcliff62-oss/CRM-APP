@@ -296,6 +296,11 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   .proposal-html table{ width: 100%; float: none !important; position: relative; z-index: 1; }
   .proposal-html img{ max-width: 100%; height: auto; }
 
+  /* Keep roofing tables full-width; avoid narrow columns from inline Word widths */
+  .proposal-html table[data-section^="roofing:"]{ width:100% !important; table-layout:auto !important; float:none !important; }
+  .proposal-html table[data-section^="roofing:"] td,
+  .proposal-html table[data-section^="roofing:"] th{ vertical-align: top; }
+
   /* Force price checkboxes to render as pill containers */
   .proposal-html label.price-choice {
     display: inline-flex !important;
@@ -871,6 +876,8 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         const inputs = Array.from(container.querySelectorAll('input.proposal-price-checkbox')) as HTMLInputElement[];
         for (const input of inputs) {
           if (!input.isConnected) continue;
+          // Skip any checkbox that lives inside a Roofing table (avoid corrupting roofing options)
+          try { if (isRoofingContext(input as any)) continue; } catch {}
           if (input.closest('[data-trim-total="1"], [data-trim-total-row="1"]')) continue;
           let label = input.closest('label.price-choice') as HTMLElement | null;
           // Derive amount from data-amount or try to parse from nearby text
@@ -979,6 +986,103 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         if (rest) frag.appendChild(document.createTextNode(rest));
         host.replaceChild(frag, node);
       }
+    }
+
+    // Cleanup: In roofing tables, strip any price pills and raw money tokens from non-total rows.
+    // Also remove any stray price <span> nodes that ended up as direct children of <tr> (mis-nested) to prevent layout overflow.
+    function stripNonTotalRoofingPills(container: HTMLElement) {
+      try {
+        const moneyOnly = (s: string) => /^(?:\s|\u00A0|[_\-–—])*\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?(?:\s|\u00A0|[_\-–—])*$/.test((s || '').replace(/\s+/g, ' '));
+        const removeMoneyFromElement = (el: HTMLElement) => {
+          // Remove any price-choice wrappers entirely, except ones in GBB price cells
+          const labels = Array.from(el.querySelectorAll('label.price-choice')) as HTMLElement[];
+          for (const lab of labels) {
+            const cell = (lab.closest('td,th') as HTMLElement | null) || el;
+            if (cell && isGBBPriceCell(cell)) continue; // preserve GBB pills
+            (lab as HTMLElement).remove();
+          }
+          // Remove checkboxes except those in GBB price cells
+          const inputs = Array.from(el.querySelectorAll('input.proposal-price-checkbox')) as HTMLElement[];
+          for (const inp of inputs) {
+            const cell = (inp.closest('td,th') as HTMLElement | null) || el;
+            if (cell && isGBBPriceCell(cell)) continue; // preserve GBB checkboxes
+            inp.remove();
+          }
+          // Replace pure money text inside with nothing; keep other text
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          const edits: Text[] = [];
+          while (walker.nextNode()) {
+            const tn = walker.currentNode as Text;
+            if (moneyOnly(tn.textContent || '')) edits.push(tn);
+          }
+          edits.forEach(tn => tn.parentNode?.removeChild(tn));
+          // Also scrub inline elements that only contain a money string
+          const spans = Array.from(el.querySelectorAll('span,b,strong,i,u,em')) as HTMLElement[];
+          for (const sp of spans) {
+            const txt = (sp.textContent || '').trim();
+            if (moneyOnly(txt)) sp.remove();
+          }
+        };
+
+        const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
+        for (const tbl of tables) {
+          const ds = (tbl.getAttribute('data-section') || '').toLowerCase();
+          const txt = (tbl.textContent || '').toUpperCase();
+          if (!(ds.startsWith('roofing:') || /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX|CEDAR\s+SHAKE\s+ROOFING|DAVINCI|RUBBER\s+ROOF(ING)?)/.test(txt))) continue;
+
+          const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+          for (const r of rows) {
+            const t = (r.textContent || '').toUpperCase();
+            const isTotal = /TOTAL\s+INVESTMENT/.test(t);
+
+            if (isTotal) {
+              // In TOTAL rows: do not remove or consolidate pills; preserve all GBB pills
+              const cells = Array.from(r.querySelectorAll('td,th')) as HTMLElement[];
+              for (const c of cells) {
+                // No-op: preserve pills
+              }
+              // Also remove any mis-nested price spans that appear as direct TR children
+              Array.from(Array.from(r.childNodes)).forEach((n) => {
+                if (!(n instanceof HTMLElement)) return;
+                if (n.tagName === 'TD' || n.tagName === 'TH') return;
+                if (moneyOnly(n.textContent || '')) n.remove();
+              });
+              continue;
+            }
+
+            // Respect Asphalt TOTAL authority rows entirely (set by public scripts)
+            const authority = ((r as unknown as HTMLElement).getAttribute('data-gbb-authority') || '').toLowerCase();
+            if (authority === 'asphalt') {
+              // Skip cleanup for Asphalt authority rows
+              continue;
+            }
+
+            // Non-total rows: operate per cell; preserve GBB price cells
+            const cells = Array.from(r.querySelectorAll('td,th')) as HTMLElement[];
+            for (const cell of cells) {
+              if (isGBBPriceCell(cell)) continue; // never strip GBB cells
+              removeMoneyFromElement(cell);
+            }
+
+            // Ensure there are no stray nodes under <tr> that can push layout horizontally
+            const stray = Array.from(r.childNodes).filter(n => !(n instanceof HTMLTableCellElement)) as Node[];
+            for (const node of stray) {
+              if (node.nodeType === Node.TEXT_NODE) {
+                const s = (node as Text).textContent || '';
+                if (moneyOnly(s) || /^\s*$/.test(s)) { node.parentNode?.removeChild(node); }
+              } else if (node instanceof HTMLElement) {
+                // If it's a span (or similar) that only shows money, drop it
+                const txt2 = (node.textContent || '').trim();
+                if (moneyOnly(txt2)) { node.remove(); continue; }
+                // Otherwise, move it into the last cell to avoid breaking table structure
+                const cells = Array.from(r.querySelectorAll('td,th')) as HTMLElement[];
+                const last = cells[cells.length - 1];
+                if (last) last.appendChild(node);
+              }
+            }
+          }
+        }
+      } catch {}
     }
 
     // Cross-tag pass: within typical cells/tags, replace sequences like "$<tag>3,600</tag>.00" with a pill
@@ -1168,6 +1272,8 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       // Skip sections that own their own logic
       const txt = (sectionRoot.textContent || '').toUpperCase();
       if (/\bTRIM\b/.test(txt) || /\bWINDOWS\s*&\s*DOORS\b/.test(txt) || /\bSKYLIGHTS\b/.test(txt)) return;
+      // Do not run generic wrappers inside Roofing tables; roofing totals/GBB handled elsewhere
+      if (isRoofingTable(sectionRoot)) return;
 
       const els = Array.from(sectionRoot.querySelectorAll('td,th,p,div,span')) as HTMLElement[];
       const moneyRe = /\$[\s\S]{0,400}?[0-9][0-9,]*(?:\.[0-9]{2})?/g;
@@ -1283,8 +1389,11 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           // Find TOTAL INVESTMENT row
           const rows = Array.from(t.querySelectorAll('tr')) as HTMLTableRowElement[];
       const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*:/i.test(r.textContent || '')) || null;
-      // Respect Asphalt TOTAL authority if set by public/elink-overrides.js
-      if (totalRow && (totalRow as HTMLElement).getAttribute('data-gbb-authority') === 'asphalt') continue;
+      // Respect Asphalt TOTAL authority if set by public/elink-overrides.js, but only skip if pills already exist
+      if (totalRow && (totalRow as HTMLElement).getAttribute('data-gbb-authority') === 'asphalt') {
+        const existingPills = Array.from((totalRow as HTMLElement).querySelectorAll('label.price-choice')) as HTMLElement[];
+        if (existingPills.length > 0) continue;
+      }
           if (!totalRow) continue;
           // In the totalRow, ensure ALL G/B/B cells contain price pills
           const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
@@ -1412,9 +1521,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
 
   // Always prepare Trim section even if not explicitly selected; visibility is handled elsewhere
 
-      // Prefer an explicit header "TRIM WORK"; else find a table with multiple trim labels
+  // Prefer an explicit header exactly "TRIM WORK"; avoid matching incidental 'trim' words in other sections
   const headerNode = (Array.from(rootEl.querySelectorAll('th,td,b,strong,span,p,u,i,em,li')) as HTMLElement[])
-        .find(el => /\bTRIM\b(\s+WORK)?\b/i.test((el.textContent || '').replace(/\s+/g, ' ').trim())) || null;
+    .find(el => /^\s*TRIM\s+WORK\s*$/i.test((el.textContent || '').replace(/\s+/g, ' ').trim())) || null;
 
       let table = headerNode ? (headerNode.closest('table') as HTMLElement | null) : null;
       let sectionHost: HTMLElement | null = table;
@@ -1434,6 +1543,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           const txt = (t.textContent || '');
           // Avoid Extra Carpentry or other extras
           if (/(POSSIBLE\s+)?EXTRA\s+CARPENTRY/i.test(txt)) return false;
+          // Avoid siding/roofing tables by data-section marker
+          const ds = (t.getAttribute('data-section') || '').toLowerCase();
+          if (ds.startsWith('siding:') || ds.startsWith('roofing:')) return false;
           let hits = 0;
           for (const re of trimLabelRes) { if (re.test(txt)) hits++; }
           return hits >= 2; // require at least two trim item labels to reduce false positives
@@ -1467,7 +1579,18 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   const mark = sectionHost as any;
   const wasInit = !!(mark.dataset && mark.dataset.trimInit === '1');
   try { mark.dataset.trimInit = '1'; } catch {}
-      sectionHost.classList.add('trim-work-table');
+  // Guard: never tag a siding or roofing table as Trim
+  if ((sectionHost as HTMLElement).closest && ((sectionHost as HTMLElement).closest('table[data-section^="siding:"]'))) return;
+  if ((sectionHost as HTMLElement).closest && ((sectionHost as HTMLElement).closest('table[data-section^="roofing:"]'))) return;
+  sectionHost.classList.add('trim-work-table');
+      // Ensure this section is recognized as Trim for all later passes, even if detectKey() misses it
+      try {
+        (sectionHost as HTMLElement).setAttribute('data-section', 'extras:trim');
+        (sectionHost as HTMLElement).setAttribute('data-section-type', 'extras:trim');
+        if (!(sectionHost as HTMLElement).getAttribute('data-section-id')) {
+          (sectionHost as HTMLElement).setAttribute('data-section-id', `extras:trim-${Date.now()}`);
+        }
+      } catch {}
 
   // Ensure the Trim TOTAL row shows a display-only numeric span (no checkboxes)
   let totalRow: HTMLElement | null = null;
@@ -1481,7 +1604,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   // If no explicit TOTAL line is present, we still attach checkboxes and let the grand total reflect selections.
 
       // Remove any pills/inputs in that row (if a TOTAL row exists)
-      if (totalRow) {
+  if (totalRow) {
         try { totalRow.setAttribute('data-trim-total-row', '1'); } catch {}
         const totalCells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
         for (const cell of totalCells) {
@@ -1814,6 +1937,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         // Safety: ensure no pills exist inside the Trim total container, even if other passes re-injected
         const totalContainer = (scope.querySelector('[data-trim-total="1"]') as HTMLElement | null) || (totalSpan?.closest('td,th') as HTMLElement | null) || null;
         if (totalContainer) {
+          // Mark container so global wrappers permanently skip it
+          try { totalContainer.setAttribute('data-trim-total', '1'); } catch {}
+          try { totalContainer.setAttribute('data-protect-total', '1'); } catch {}
           Array.from(totalContainer.querySelectorAll('label.price-choice,input.proposal-price-checkbox')).forEach(el => (el as HTMLElement).remove());
           // Also ensure any stray .trim-total-dollar remnants are removed
           Array.from(totalContainer.querySelectorAll('.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
@@ -2373,7 +2499,135 @@ export default function ProposalView({ params }: { params: { id: string } }) {
 
     // After specific sections are prepared, run global wrappers and extras gating last
   (function finalizeGlobalSetup(){
-      // Snapshot COLOR: lines to restore later if any enhancer disturbed them
+      // Compute per-category siding subtotals from snapshot for resilient display
+      function computeSidingSubtotals(): Record<string, number> {
+        const s: any = snapshot || {};
+        const pr: any = (s?.pricing?.siding || {});
+        const rates: any = (pr?.rates || {});
+        const cats: any = (pr?.byCategory || {});
+        const money = (n: any) => { const v = Number(n || 0); return isFinite(v) ? Math.round(v * 100) / 100 : 0; };
+        const pickUnit = (cat: string, src: any): number => {
+          const direct = Number(src?.unit || 0); if (isFinite(direct) && direct > 0) return direct;
+          const catRates: any = rates?.[cat] || {};
+          const product: string = String(src?.product || Object.keys(catRates || {})[0] || '') || '';
+          const rate = Number(product ? catRates[product] : 0);
+          if (isFinite(rate) && rate > 0) return rate;
+          const fallback = Number(pr?.unit || 0); return isFinite(fallback) ? fallback : 0;
+        };
+        const read = (cat: string, src: any): number => {
+          const calc = String(src?.calcMode || pr?.calcMode || 'bySquare');
+          if (calc === 'manual') return money(src?.manualTotal || 0);
+          const unit = pickUnit(cat, src || {});
+          const squares = Number(src?.squares ?? pr?.squares ?? pr?.wallSquares ?? pr?.squareFootage ?? 0) || 0;
+          let subtotal = money(unit * squares);
+          const woven = (src?.wovenCorners || {}) as any;
+          if (woven?.include) subtotal = money(subtotal + 45 * Number(woven?.feet || 0));
+          return money(subtotal);
+        };
+        return {
+          synthetic: read('synthetic', cats?.synthetic || {}),
+          cedar:     read('cedarShake', cats?.cedarShake || {}),
+          vinyl:     read('vinyl', cats?.vinyl || {}),
+          clap:      read('clapBoard', cats?.clapBoard || {}),
+        };
+      }
+      // Ensure each siding section TOTAL INVESTMENT shows the correct amount once
+      function ensureSidingSectionTotals(container: HTMLElement) {
+        const amounts = computeSidingSubtotals();
+        const fmtUsd = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+        const findSectionTables = (key: 'synthetic'|'cedar'|'vinyl'|'clap') => {
+          const map: Record<string,string> = {
+            synthetic: 'siding:synthetic',
+            cedar: 'siding:cedar',
+            vinyl: 'siding:vinyl',
+            clap: 'siding:clapboard',
+          };
+          const attr = map[key];
+          let list = Array.from(container.querySelectorAll(`table[data-section="${attr}"]`)) as HTMLElement[];
+          if (list.length) return list;
+          // Fallback: regex on text if data-section not set yet
+          const reMap: Record<typeof key, RegExp> = {
+            synthetic: /\bSYNTHETIC(\s+SIDING)?\b/i,
+            cedar: /\bCEDAR\s+SHAKE(\s+SIDING)?\b/i,
+            vinyl: /\bVINYL(\s+SIDING)?\b/i,
+            clap: /(\bCLAP\s*BOARD\b|\bCLAPBOARD\b)(\s+SIDING)?/i,
+          } as any;
+          const re = reMap[key];
+          list = (Array.from(container.querySelectorAll('table')) as HTMLElement[]).filter(t => re.test((t.textContent || '')));
+          return list;
+        };
+        const SECTIONS: Array<{ key: keyof typeof amounts }> = [
+          { key: 'synthetic' }, { key: 'cedar' }, { key: 'clap' }, { key: 'vinyl' }
+        ];
+        const hasMoney = (s: string) => /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/.test(s);
+        const debug: Array<{section: string; amount: number; tables: number}> = [];
+        for (const sec of SECTIONS) {
+          const amt = Number((amounts as any)[sec.key] || 0);
+          const tables = findSectionTables(sec.key as any);
+          debug.push({ section: sec.key, amount: amt, tables: tables.length });
+          for (const tbl of tables) {
+            const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+            let totalRow: HTMLTableRowElement | null = rows.find(r => /TOTAL\s+INVESTMENT\s*:/i.test(r.textContent || '')) || null;
+            const colCount = Math.max(1, ...rows.map(r => Array.from(r.querySelectorAll('td,th')).length), 1);
+            // Always replace or create the TOTAL row with a standardized single cell containing the computed amount
+            if (!totalRow) {
+              totalRow = document.createElement('tr');
+              (tbl as unknown as HTMLTableElement).tBodies[0]?.appendChild(totalRow) || tbl.appendChild(totalRow);
+            }
+            while (totalRow.firstChild) totalRow.removeChild(totalRow.firstChild);
+            const td = document.createElement('td');
+            td.colSpan = colCount;
+            // Center the TOTAL INVESTMENT row for siding sections
+            td.style.textAlign = 'center';
+            // Build label text
+            const labelBold = document.createElement('b');
+            const under = document.createElement('u');
+            const lblSpan = document.createElement('span');
+            lblSpan.style.fontSize = '14.0pt';
+            lblSpan.textContent = 'TOTAL INVESTMENT:';
+            under.appendChild(lblSpan);
+            labelBold.appendChild(under);
+            td.appendChild(labelBold);
+            td.appendChild(document.createTextNode(' '));
+            // Ensure single pill+checkbox exists with computed amount (skip $0)
+            if (amt > 0) {
+              let pill = td.querySelector('label.price-choice') as HTMLElement | null;
+              if (!pill) {
+                pill = document.createElement('label');
+                pill.className = 'price-choice';
+                td.appendChild(pill);
+              }
+              // Create/refresh price span
+              let priceSpan = pill.querySelector('span') as HTMLSpanElement | null;
+              if (!priceSpan) {
+                priceSpan = document.createElement('span');
+                pill.appendChild(priceSpan);
+              }
+              priceSpan.textContent = fmtUsd(amt);
+              priceSpan.className = 'siding-total-amount';
+              priceSpan.setAttribute('data-siding-section', String(sec.key));
+              priceSpan.setAttribute('data-siding-computed', String(amt));
+              // Ensure checkbox exists and is after the span
+              let input = pill.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null;
+              if (!input) {
+                input = document.createElement('input');
+                input.type = 'checkbox';
+                input.className = 'proposal-price-checkbox';
+                pill.appendChild(input);
+              }
+              input.setAttribute('data-amount', String(amt));
+            }
+            totalRow.appendChild(td);
+            // Ensure no Trim markers remain on this row/cell that could force left alignment or strip pills
+            try { td.removeAttribute('data-trim-total'); td.removeAttribute('data-protect-total'); } catch {}
+            try { (totalRow as HTMLElement).removeAttribute('data-trim-total-row'); } catch {}
+            (tbl as HTMLElement).setAttribute('data-siding-total-fixed', '1');
+            (tbl as HTMLElement).setAttribute('data-siding-computed-amount', String(amt));
+          }
+        }
+        try { console.table(debug); } catch {}
+      }
+  // Snapshot COLOR: lines to restore later if any enhancer disturbed them
       const protectColorLines = (container: HTMLElement) => {
         const targets = Array.from(container.querySelectorAll('td,th,p,span,div')) as HTMLElement[];
         const leafs = targets.filter(el => {
@@ -2393,10 +2647,61 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       };
       const restoreColorGuards = protectColorLines(root);
       // Ensure Trim photos are present (if any) before any gating that might hide the section
+  // Tag sections first so we can target them deterministically
+  try { applySelectionGating(root); } catch {}
   setupTrimSection();
+      // Cleanup: if any SIDING tables were accidentally tagged as Trim, strip Trim markers to stop interference/twitching
+      (function stripTrimMarkersFromSiding(){
+        try {
+          const sidingTables = Array.from(root.querySelectorAll('table[data-section^="siding:"]')) as HTMLElement[];
+          for (const tbl of sidingTables) {
+            // Remove misapplied Trim class and attributes
+            tbl.classList?.remove('trim-work-table');
+            const attrs = Array.from(tbl.attributes) as any[];
+            for (const a of attrs) {
+              const name = String(a?.name || '').toLowerCase();
+              if (name.startsWith('data-trim-') || name === 'data-protect-total') {
+                try { tbl.removeAttribute(a.name); } catch {}
+              }
+            }
+            // Also remove any nested Trim-total flags within this table
+            Array.from(tbl.querySelectorAll('[data-trim-total],[data-trim-total-row]')).forEach(el => {
+              try { (el as HTMLElement).removeAttribute('data-trim-total'); } catch {}
+              try { (el as HTMLElement).removeAttribute('data-trim-total-row'); } catch {}
+              try { (el as HTMLElement).removeAttribute('data-protect-total'); } catch {}
+            });
+          }
+        } catch {}
+      })();
+  // Ensure siding section totals are visible on the correctly tagged sections
+  try { ensureSidingSectionTotals(root); } catch {}
+  // Ensure any existing siding total spans are wrapped in a pill+checkbox
+  (function wrapSidingTotalSpans(){
+    try {
+      const spans = Array.from(root.querySelectorAll('.siding-total-amount')) as HTMLElement[];
+      for (const s of spans) {
+        if (s.closest('label.price-choice')) continue;
+        const amt = Number((s.getAttribute('data-siding-computed') || '0'));
+        const label = document.createElement('label');
+        label.className = 'price-choice';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'proposal-price-checkbox';
+        input.setAttribute('data-amount', String(amt));
+        const parent = s.parentNode as Node | null;
+        if (!parent) continue;
+        parent.insertBefore(label, s);
+        label.appendChild(s);
+        label.appendChild(input);
+      }
+    } catch {}
+  })();
   ensureTrimPhotosFallback(root);
+  try { normalizeRoofingTotalRows(root); } catch {}
+  try { hideRoofingSelectionPrompt(root); } catch {}
   ensureNorthGateGBBPill(root);
   ensureAsphaltColorBlank(root);
+  stripNonTotalRoofingPills(root);
   // Color dropdowns removed
   // First, apply selection gating so sections are tagged with data-section
   try { applySelectionGating(root); } catch {}
@@ -2425,11 +2730,59 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   // Stabilization retries to survive late DOM swaps during initial render
   const reapply = () => { 
         setupTrimSection(); 
+        try { stripTrimMarkersFromNonTrim(root as HTMLElement); } catch {}
+        try { normalizeRoofingTotalRows(root); } catch {}
+  try { hideRoofingSelectionPrompt(root); } catch {}
+  try { ensureSidingSectionTotals(root); } catch {}
         ensureTrimPhotosFallback(root); 
         ensureNorthGateGBBPill(root); 
         ensureAsphaltColorBlank(root); 
-        // Tag sections and apply scoped money wrappers instead of global
-        try { applySelectionGating(root); } catch {}
+  stripNonTotalRoofingPills(root);
+  // Tag sections and apply scoped money wrappers instead of global
+  try { applySelectionGating(root); } catch {}
+  try { ensureSidingSectionTotals(root); } catch {}
+        // Re-sanitize siding tables in case late mutations reintroduced Trim markers
+        (function stripTrimMarkersFromSiding(){
+          try {
+            const sidingTables = Array.from(root.querySelectorAll('table[data-section^="siding:"]')) as HTMLElement[];
+            for (const tbl of sidingTables) {
+              tbl.classList?.remove('trim-work-table');
+              const attrs = Array.from(tbl.attributes) as any[];
+              for (const a of attrs) {
+                const name = String(a?.name || '').toLowerCase();
+                if (name.startsWith('data-trim-') || name === 'data-protect-total') {
+                  try { tbl.removeAttribute(a.name); } catch {}
+                }
+              }
+              Array.from(tbl.querySelectorAll('[data-trim-total],[data-trim-total-row]')).forEach(el => {
+                try { (el as HTMLElement).removeAttribute('data-trim-total'); } catch {}
+                try { (el as HTMLElement).removeAttribute('data-trim-total-row'); } catch {}
+                try { (el as HTMLElement).removeAttribute('data-protect-total'); } catch {}
+              });
+            }
+          } catch {}
+        })();
+        // Re-wrap any loose siding total spans
+        (function wrapSidingTotalSpans(){
+          try {
+            const spans = Array.from(root.querySelectorAll('.siding-total-amount')) as HTMLElement[];
+            for (const s of spans) {
+              if (s.closest('label.price-choice')) continue;
+              const amt = Number((s.getAttribute('data-siding-computed') || '0'));
+              const label = document.createElement('label');
+              label.className = 'price-choice';
+              const input = document.createElement('input');
+              input.type = 'checkbox';
+              input.className = 'proposal-price-checkbox';
+              input.setAttribute('data-amount', String(amt));
+              const parent = s.parentNode as Node | null;
+              if (!parent) continue;
+              parent.insertBefore(label, s);
+              label.appendChild(s);
+              label.appendChild(input);
+            }
+          } catch {}
+        })();
         try { enhanceAllSections(root); } catch {}
         ensureLooseCheckboxPills(root); 
         ensurePillVisibility(root); 
@@ -2461,6 +2814,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           ensureTrimPhotosFallback(root);
           ensureNorthGateGBBPill(root);
           ensureAsphaltColorBlank(root);
+          stripNonTotalRoofingPills(root);
           // Color dropdowns removed
       // Tag and enhance sections locally to avoid cross-section clobbering
       try { applySelectionGating(root); } catch {}
@@ -2524,6 +2878,19 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     }
     function isAsphaltGBBContext(el: HTMLElement | null): boolean {
       return isGBBContext(el) && isAsphaltContext(el);
+    }
+    // Detect general Roofing context/tables to avoid generic price wrapping there
+    function isRoofingTable(table: HTMLElement | null): boolean {
+      if (!table) return false;
+      const ds = (table.getAttribute('data-section') || '').toLowerCase();
+      if (ds.startsWith('roofing:')) return true;
+      const txt = (table.textContent || '').toUpperCase();
+      return /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX|CEDAR\s+SHAKE\s+ROOFING|DAVINCI|RUBBER\s+ROOF(ING)?)/.test(txt);
+    }
+    function isRoofingContext(el: HTMLElement | null): boolean {
+      if (!el) return false;
+      const table = el.closest('table') as HTMLElement | null;
+      return isRoofingTable(table);
     }
     function getCellIndex(td: HTMLElement | null): number {
       if (!td) return -1;
@@ -2756,7 +3123,11 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   for (const sec of nonFinalTotals) {
       // Skip rows that are controlled by public/elink-overrides.js (Asphalt TOTAL authority)
       const owningRow = (sec.closest('tr') as HTMLElement | null);
-      if (owningRow && owningRow.getAttribute('data-gbb-authority') === 'asphalt') continue;
+      // Respect Asphalt TOTAL authority but only skip if pills already exist in the row
+      if (owningRow && owningRow.getAttribute('data-gbb-authority') === 'asphalt') {
+        const existingPills = Array.from(owningRow.querySelectorAll('label.price-choice')) as HTMLElement[];
+        if (existingPills.length > 0) continue;
+      }
       // Skip if already has a checkbox injected
       if (sec.querySelector('input.proposal-price-checkbox')) continue;
       // HARD SKIPS to protect Trim
@@ -2828,7 +3199,11 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           if (cell.querySelector('input.proposal-price-checkbox')) continue;
           // Respect Asphalt TOTAL authority for the entire row
           const rowHost = (rowScope.closest ? (rowScope.closest('tr') as HTMLElement | null) : null) || (sec.closest('tr') as HTMLElement | null);
-          if (rowHost && rowHost.getAttribute('data-gbb-authority') === 'asphalt') continue;
+          // Respect Asphalt TOTAL authority but only skip if pills already exist in the row
+          if (rowHost && rowHost.getAttribute('data-gbb-authority') === 'asphalt') {
+            const existingPills = Array.from(rowHost.querySelectorAll('label.price-choice')) as HTMLElement[];
+            if (existingPills.length > 0) continue;
+          }
           const gbb2 = isAsphaltGBBPrice(cell);
           const html0 = cell.innerHTML;
           let changed = false;
@@ -2882,6 +3257,32 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     const table = el.closest('table') as HTMLElement | null;
     if (table) carpContainers.add(table);
   }
+
+  // Remove accidental Trim markers from non-trim tables (roofing/siding), including stray .trim-total-amount
+  function stripTrimMarkersFromNonTrim(root: HTMLElement) {
+    const tables = Array.from(root.querySelectorAll('table')) as HTMLElement[];
+    for (const t of tables) {
+      const txt = (t.textContent || '').toUpperCase();
+      const isLikelyRoof = /ROOFING|SHINGLE|ASPHALT|NORTH\s*GATE|CLIMATE\s*FLEX|MALARK|OWENS\s*CORNING/.test(txt) || isRoofingTable(t as HTMLElement);
+      const isTrimTagged = (t as HTMLElement).classList?.contains('trim-work-table') || !!(t.closest('[data-section]') as HTMLElement | null)?.dataset.section?.includes('extras:trim');
+      if (isLikelyRoof && isTrimTagged) {
+        (t as HTMLElement).classList?.remove('trim-work-table');
+        const sec = (t as HTMLElement).closest('[data-section]') as HTMLElement | null;
+        if (sec && (sec.dataset.section || '').includes('extras:trim')) {
+          sec.dataset.section = (sec.dataset.section || '').replace('extras:trim', '').trim() || sec.dataset.section || '';
+          sec.removeAttribute('data-section-type');
+          sec.removeAttribute('data-section-id');
+        }
+      }
+      // Remove stray trim-total-amount spans from non-trim tables
+      if (!(t as HTMLElement).classList?.contains('trim-work-table')) {
+        Array.from(t.querySelectorAll('.trim-total-amount,.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
+      }
+    }
+  }
+  // Identify Roofing tables to keep generic passes from touching them
+  const roofingTables = (Array.from(root.querySelectorAll('table')) as HTMLElement[]).filter(t => isRoofingTable(t));
+  const roofingContainers = new Set<HTMLElement>(roofingTables);
   // Identify the SKYLIGHTS section container (table) for special handling
     const skylightsHeader = allEls.find(el => /\bSKYLIGHTS\b/i.test(el.textContent || '')) as HTMLElement | undefined;
     const skylightsTable = skylightsHeader ? (skylightsHeader.closest('table') as HTMLElement | null) : null;
@@ -2918,7 +3319,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     // Skip Windows & Doors table entirely
   if ((el.closest && el.closest('table.windows-doors-table')) || el.matches?.('table.windows-doors-table')) continue;
   // Skip anything inside the Skylights section/table to avoid interfering with specialized logic
-  if (elemInAny(el, skylightsContainers)) continue;
+        if (elemInAny(el, skylightsContainers)) continue;
+        // Skip anything inside Roofing tables (generic wrappers break option layout)
+        if (elemInAny(el, roofingContainers)) continue;
         // Skip if within any known TOTAL container (overall, gutters, siding, trim)
         if (elemInAny(el, totalContainers)) continue;
         // Skip if this element is within an already-injected price label
@@ -2957,7 +3360,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     // Skip Windows & Doors table entirely
         if ((el.closest && el.closest('table.windows-doors-table')) || el.matches?.('table.windows-doors-table')) continue;
   // Skip anything inside the Skylights section/table to avoid interfering with specialized logic
-  if (elemInAny(el, skylightsContainers)) continue;
+        if (elemInAny(el, skylightsContainers)) continue;
+        // Skip anything inside Roofing tables (generic wrappers break option layout)
+        if (elemInAny(el, roofingContainers)) continue;
         // Skip if within any known TOTAL container (overall, gutters, siding, trim)
         if (elemInAny(el, totalContainers)) continue;
         // Skip if this element is within an already-injected price label
@@ -3694,7 +4099,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       setupSkylightQty();
 
   // Trim section handled earlier via strict detection; legacy heuristic block removed
-      setupTrimSection();
+  setupTrimSection();
+  // New: clean up any accidental Trim markers in roofing/siding tables so they don't interfere with totals
+  try { stripTrimMarkersFromNonTrim(root as HTMLElement); } catch {}
 
       // Section totals enhancer disabled on View (handled by template/print)
 
@@ -3710,10 +4117,12 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   const elements = Array.from(root.querySelectorAll('td,th,p,div,span')) as HTMLElement[];
   const moneyCrossTag = /\$[\s\S]{0,400}?[0-9][0-9,]*(?:\.[0-9]{2})?/g;
         const isTotalLabel = (s: string) => /TOTAL\s+(?:INVESTMENT|GUTTER\s+INVESTMENT|SIDING\s+INVESTMENT|SKYLIGHT\s+INVESTMENT)\s*:/i.test(s);
-        for (const el of elements) {
+      for (const el of elements) {
           // Skip if inside a price-choice already or inside Windows & Doors (handled earlier)
           if (el.closest('label.price-choice')) continue;
           if (el.closest('table.windows-doors-table')) continue;
+        // Skip generic wrapping inside Roofing tables (protect option price layouts)
+        if (isRoofingContext(el)) continue;
           if (el.querySelector('input.proposal-price-checkbox')) continue;
       // Skip inside Trim total container or Trim table host to avoid disrupting placed pills
       if (el.closest('[data-trim-total="1"], table.trim-work-table')) continue;
@@ -3832,6 +4241,37 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         });
       } catch {}
     })();
+
+    // Helper: purge stray trim markers inside roofing tables TOTAL rows and assert asphalt authority for injector
+    function normalizeRoofingTotalRows(rootEl: HTMLElement){
+      try {
+        const tables = Array.from(rootEl.querySelectorAll('table')) as HTMLElement[];
+        for (const t of tables) {
+          if (!isRoofingTable(t as HTMLElement)) continue;
+          const rows = Array.from(t.querySelectorAll('tr')) as HTMLTableRowElement[];
+          const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*:?/i.test(r.textContent || '')) || null;
+          if (!totalRow) continue;
+          // Remove any trim subtotal spans mistakenly placed in this roofing TOTAL row
+          Array.from(totalRow.querySelectorAll('.trim-total-amount,.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
+          // Strip trim-specific attributes from row, label cell, and any descendants
+          try { (totalRow as HTMLElement).removeAttribute('data-trim-total-row'); } catch {}
+          try { (totalRow as HTMLElement).removeAttribute('data-protect-total'); } catch {}
+          const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+          const labelCell = cells.find(c => /TOTAL\s+INVESTMENT\s*:?/i.test(c.textContent || '')) || null;
+          if (labelCell) {
+            try { labelCell.removeAttribute('data-trim-total'); } catch {}
+            try { labelCell.removeAttribute('data-protect-total'); } catch {}
+          }
+          Array.from(totalRow.querySelectorAll('[data-trim-total-row],[data-trim-total],[data-protect-total]')).forEach(el => {
+            try { (el as HTMLElement).removeAttribute('data-trim-total-row'); } catch {}
+            try { (el as HTMLElement).removeAttribute('data-trim-total'); } catch {}
+            try { (el as HTMLElement).removeAttribute('data-protect-total'); } catch {}
+          });
+          Array.from(totalRow.querySelectorAll('.trim-total-amount,.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
+          try { (totalRow as HTMLElement).setAttribute('data-gbb-authority', 'asphalt'); } catch {}
+        }
+      } catch {}
+    }
 
     // Initial calc after all injections
     recalc();
@@ -4047,6 +4487,37 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     } catch {
       return null;
     }
+  }
+
+  // Hide the prompt row: "Please Check Selection" under Asphalt GBB header
+  function hideRoofingSelectionPrompt(rootEl: HTMLElement) {
+    try {
+      const tables = Array.from(rootEl.querySelectorAll('table')) as HTMLElement[];
+      for (const t of tables) {
+        // Guard via text instead of function ref to avoid ordering issues
+        const txtTable = (t.textContent || '').toUpperCase();
+        const isRoof = /(ASPHALT|ROOFING|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txtTable) || ((t.getAttribute('data-section') || '').toLowerCase().startsWith('roofing:'));
+        if (!isRoof) continue;
+        const rows = Array.from(t.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const promptRe = /Please\s+Check\s+Selection/i;
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i];
+          const txt = (r.textContent || '').replace(/\s+/g, ' ').trim();
+          // Hide if row contains the phrase anywhere, or if it's the last non-empty row and matches loosely
+          if (promptRe.test(txt)) {
+            (r as HTMLElement).style.display = 'none';
+            (r as HTMLElement).setAttribute('data-hidden-prompt', '1');
+            continue;
+          }
+          // Heuristic: last row, very short text, likely the prompt
+          const isLastRow = i === rows.length - 1;
+          if (isLastRow && /Please\s+Check/i.test(txt)) {
+            (r as HTMLElement).style.display = 'none';
+            (r as HTMLElement).setAttribute('data-hidden-prompt', '1');
+          }
+        }
+      }
+    } catch {}
   }
 
   // Minimal helpers preserved for recompute if needed by downstream logic

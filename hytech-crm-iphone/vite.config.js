@@ -31,6 +31,10 @@ export default defineConfig(({ mode }) => {
 					changeOrigin: true,
 					secure: false,
 				},
+          // Proposal app embedding (assets + index)
+          '/proposal-app': { target: API_TARGET, changeOrigin: true, secure: false },
+          // Short path alias if used anywhere
+          '/p': { target: API_TARGET, changeOrigin: true, secure: false },
 			},
 		},
 	}

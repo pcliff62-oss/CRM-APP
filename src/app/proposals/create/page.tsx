@@ -2,7 +2,8 @@ import Link from "next/link";
 
 export default function CreateProposalPage({ searchParams }: { searchParams: { lead?: string } }) {
   const lead = searchParams.lead || "";
-  const url = lead ? `/proposal-app/?lead=${encodeURIComponent(lead)}` : "/proposal-app";
+  const version = typeof Date !== 'undefined' ? Date.now() : 0;
+  const url = `/proposal-app${lead ? `?lead=${encodeURIComponent(lead)}` : ''}${lead ? `&v=${version}` : `?v=${version}`}`;
   return (
     <div className="h-[calc(100vh-8rem)] flex flex-col gap-3">
       <div className="flex justify-between items-center">

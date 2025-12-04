@@ -210,7 +210,7 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
   try {
     const a = scope?.asphalt || {};
     const iw = a?.iceAreas || {};
-    Object.assign(data, {
+  Object.assign(data, {
       asphalt_plywood_sentence: ({
         inspectRenail: "Inspect and Re-Nail Any loose or popped plywood or boards on the Entire Roof Deck Area of the House.",
         replace:       "Replace the existing plywood on the Entire Roof Deck Area of the House.",
@@ -496,14 +496,13 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
       siding_synthetic_product_label: productLabelFor("synthetic", String(syn.productLabel || syn.product || "")) || String(syn.productLabel || syn.product || ""),
       siding_synthetic_exposure: String(syn.exposure || pricing?.siding?.exposure || "").trim(),
       siding_synthetic_color: String(syn.color || scope?.siding?.color || "").trim(),
-      // Ensure synthetic siding total placeholder can populate
-      // Template uses a {siding_synthetic_subtotal} token; expose it and its row flag
+  // Ensure synthetic siding total placeholder can populate
+  // Template uses a {siding_synthetic_subtotal} token; expose it and gate row flags by selection
   siding_synthetic_subtotal: moneyStr(syntheticSubtotal),
   siding_synthetic_subTotal: moneyStr(syntheticSubtotal), // alias variant (capital T) from older templates
-  // Always show row flags (legacy Word mangling may break detection; unguard so renderer doesn't hide line)
-  row_siding_synthetic_subtotal: [{}],
-  row_siding_synthetic_subTotal: [{}],
-  row_siding_synthetic_total: [{}],
+  row_siding_synthetic_subtotal: syntheticOn ? [{}] : [],
+  row_siding_synthetic_subTotal: syntheticOn ? [{}] : [],
+  row_siding_synthetic_total:    syntheticOn ? [{}] : [],
       // Cedar Shake product label & basics
       show_siding_cedarShake: cedarOn ? [{
         siding_total:    moneyStr(cedarSubtotal),
@@ -519,10 +518,13 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
       siding_cedar_exposure: String(cedar.exposure || pricing?.siding?.exposure || "").trim(),
       siding_cedar_color: String(cedar.color || scope?.siding?.color || "").trim(),
       siding_cedar_areas: String(cedar.areas || pricing?.siding?.areas || "").trim(),
-  siding_cedar_subtotal: moneyStr(cedarSubtotal),
-  siding_cedar_subTotal: moneyStr(cedarSubtotal), // alias
-  siding_cedar_total:    moneyStr(cedarSubtotal),
-      // Vinyl product label & basics
+  // Cedar siding subtotal/total tokens (strictly siding-only; no roofing coupling)
+  // Previously these incorrectly fell back to the roofing cedar total when siding wasn't selected.
+  // Now they only populate when Cedar Shake Siding is part of the selected work.
+  siding_cedar_subtotal: cedarOn ? moneyStr(cedarSubtotal) : "",
+  siding_cedar_subTotal: cedarOn ? moneyStr(cedarSubtotal) : "", // alias
+  siding_cedar_total:    cedarOn ? moneyStr(cedarSubtotal) : "",
+  // Vinyl product label & basics
       show_siding_vinyl: vinylOn ? [{
         siding_total:    moneyStr(vinylSubtotal),
         siding_subtotal: moneyStr(vinylSubtotal),
@@ -537,9 +539,9 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
       siding_vinyl_exposure: String(vinyl.exposure || pricing?.siding?.exposure || "").trim(),
       siding_vinyl_color: String(vinyl.color || scope?.siding?.color || "").trim(),
       siding_vinyl_areas: String(vinyl.areas || pricing?.siding?.areas || "").trim(),
-  siding_vinyl_subtotal: moneyStr(vinylSubtotal),
-  siding_vinyl_subTotal: moneyStr(vinylSubtotal), // alias
-  siding_vinyl_total:    moneyStr(vinylSubtotal),
+  siding_vinyl_subtotal: vinylOn ? moneyStr(vinylSubtotal) : "",
+  siding_vinyl_subTotal: vinylOn ? moneyStr(vinylSubtotal) : "", // alias
+  siding_vinyl_total:    vinylOn ? moneyStr(vinylSubtotal) : "",
       // Clap Board product label & basics
       show_siding_clapBoard: clapOn ? [{
         siding_total:    moneyStr(clapSubtotal),
@@ -554,9 +556,9 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
       siding_clap_product_label: productLabelFor("clapBoard", String(clap.productLabel || clap.product || "")) || String(clap.productLabel || clap.product || ""),
       siding_clap_exposure: String(clap.exposure || pricing?.siding?.exposure || "").trim(),
       siding_clap_areas: String(clap.areas || pricing?.siding?.areas || "").trim(),
-  siding_clap_subtotal: moneyStr(clapSubtotal),
-  siding_clap_subTotal: moneyStr(clapSubtotal), // alias
-  siding_clap_total:    moneyStr(clapSubtotal),
+  siding_clap_subtotal: clapOn ? moneyStr(clapSubtotal) : "",
+  siding_clap_subTotal: clapOn ? moneyStr(clapSubtotal) : "", // alias
+  siding_clap_total:    clapOn ? moneyStr(clapSubtotal) : "",
       row_siding_typar:            showBool(!!scope?.siding?.typar),
       row_siding_vycorTape:        showBool(!!scope?.siding?.vycorTape),
       row_siding_stainlessStaples: showBool(!!scope?.siding?.stainlessStaples),
@@ -661,6 +663,12 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
       const sum = Object.values(totals || {}).reduce((acc: number, value: any) => acc + num(value), 0);
       if (sum) sidingBase = round2(sum);
     }
+  // Siding per-category totals for independent tokens (synthetic/cedarShake/vinyl/clapBoard)
+  const sidingTotalsByCat = (computed?.sidingTotals || {}) as AnyDict;
+  const sidingSyntheticTotal = round2(num(sidingTotalsByCat?.synthetic || 0));
+  const sidingCedarTotal     = round2(num(sidingTotalsByCat?.cedarShake || 0));
+  const sidingVinylTotal     = round2(num(sidingTotalsByCat?.vinyl || 0));
+  const sidingClapTotal      = round2(num(sidingTotalsByCat?.clapBoard || 0));
     // Windows & Doors (compute friendly fallbacks and expose row flags)
     const w = (pricing?.windowsAndDoors || {}) as AnyDict;
     const wndComputed = (() => {
@@ -682,7 +690,20 @@ function buildDocxLikeData(snap: AnyDict, view: WebProposal): AnyDict {
       davinci_total:  moneyStr(davinciBase),
       cedar_total:    moneyStr(cedarBase),
       rubber_total:   moneyStr(rubberBase),
-      siding_total:   moneyStr(sidingBase),
+  // Asphalt totals: expose aggregate and aliases so Word templates can reference a single asphalt total
+  asphalt_total:  moneyStr(asphaltGood + asphaltBetter + asphaltBest),
+  asphalt_gbb_total: moneyStr(asphaltGood + asphaltBetter + asphaltBest), // alias for aggregate
+  asphalt_landmark_total: moneyStr(asphaltGood),   // Good
+  asphalt_pro_total:      moneyStr(asphaltBetter), // Better
+  asphalt_northgate_total:moneyStr(asphaltBest),   // Best
+  // Do not expose a global {siding_total}; it risks being referenced in roofing sections by mistake.
+  // Siding subtotals/totals are injected only inside their section wrappers above.
+  siding_total:   "",
+  // Per-category siding totals for templates that want explicit amounts by option
+  siding_synthetic_total: moneyStr(sidingSyntheticTotal),
+  siding_cedarShake_total: moneyStr(sidingCedarTotal),
+  siding_vinyl_total:     moneyStr(sidingVinylTotal),
+  siding_clapBoard_total: moneyStr(sidingClapTotal),
   // Section total
   windows_and_doors_total: moneyStr(wndTotal),
   // Section visibility and line rows
@@ -1148,12 +1169,7 @@ function escapeHtmlAttr(s: any) {
 export function renderProposalTemplate(html: string, view: WebProposal, snap: any) {
   let out = String(html || "");
 
-  // Strip/neutralize mangled synthetic siding row wrappers before any token processing
-  out = out
-    .replace(/\{#row_siding_synthetic_(?:sub[Tt]otal|subtotal|total)\}/g, "")
-    .replace(/\{\/row_siding_synthetic_(?:sub[Tt]otal|subtotal|total)\}/g, "")
-    .replace(/\{#show_siding_synthetic\}/gi, "")
-    .replace(/\{\/show_siding_synthetic\}/gi, "");
+  // Do not strip siding show/hide wrappers; we now fully honor template gating
 
   // Mask {{double-curly}} so the single-brace renderer doesn't partially match them
   const OPEN = "__DBL_OPEN__";
@@ -1189,7 +1205,7 @@ export function renderProposalTemplate(html: string, view: WebProposal, snap: an
     out = preExpanded.replace(new RegExp(OPEN, "g"), "{{").replace(new RegExp(CLOSE, "g"), "}}");
   }
 
-  // Fallback: replace any remaining synthetic subtotal/total tokens directly (post-render), remove stray row tags
+  // Fallback: replace any remaining synthetic subtotal/total tokens directly (post-render)
   const synAmt = String(
     docxData.siding_synthetic_subtotal ||
     docxData.siding_synthetic_subTotal ||
@@ -1200,35 +1216,99 @@ export function renderProposalTemplate(html: string, view: WebProposal, snap: an
       .replace(/\{siding_synthetic_sub[Tt]otal\}/g, escapeHtml(synAmt))
       .replace(/\{siding_synthetic_total\}/g, escapeHtml(synAmt));
   }
-  out = out.replace(/\{[#\/]row_siding_synthetic_[a-zA-Z0-9_.]+\}/g, "");
   // Map generic siding totals to section-specific amounts so each section only shows its own total
   const secAmt = {
     cedar: String(docxData.siding_cedar_subtotal || docxData.siding_cedar_subTotal || docxData.siding_cedar_total || ""),
     vinyl: String(docxData.siding_vinyl_subtotal || docxData.siding_vinyl_subTotal || docxData.siding_vinyl_total || ""),
     clap:  String(docxData.siding_clap_subtotal  || docxData.siding_clap_subTotal  || docxData.siding_clap_total  || ""),
   } as Record<string, string>;
+  // Helper: within a section's inner HTML, enforce a TOTAL INVESTMENT amount even if Word split tokens across tags
+  function enforceTotalLine(innerHtml: string, amount: string): string {
+    if (!amount) return innerHtml;
+    let s = innerHtml;
+    // Normalize any Word-split {siding_total}/{siding_subtotal} tokens to a plain placeholder to replace
+    const braceToken = /\{\s*(?:<[^>]+>\s*)*(siding_(?:sub)?total)(?:\s*<[^>]+>)*\s*\}/gi;
+    s = s.replace(braceToken, (_m, _key: string) => escapeHtml(amount));
+    // If TOTAL INVESTMENT is present but has no amount, inject the amount after the label
+    const totalLineRe = /(TOTAL\s+INVESTMENT\s*[:\-–—]?)([\s\S]{0,200}?)(?=<\/|$)/i;
+    s = s.replace(totalLineRe, (full: string, label: string, tail: string) => {
+      // If there's already a $number somewhere in the tail, leave as-is
+      if (/\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/.test(tail)) return full;
+      // Remove stray placeholder underscores or orphan '$'
+      const cleanTail = tail.replace(/[_\s\u00A0]+/g, " ").replace(/\$\s*(?![0-9])/g, "");
+      const injected = `${label} ${escapeHtml(amount)}`;
+      // Preserve the original trailing content if it's not just junk
+      const keep = /\S/.test(cleanTail) ? ` ${cleanTail}` : "";
+      return injected + keep;
+    });
+    return s;
+  }
+
+  // Asphalt-only guard: strip the incorrect centered TD label row that says "TOTAL INVESTMENT:" inside the Asphalt section.
+  // This ignores only the TD-based label and leaves the correct pill paragraph intact. No enforcement/cleanup runs for Asphalt.
+  out = out.replace(/\{#show_asphalt\}([\s\S]*?)\{\/show_asphalt\}/gi, (m: string, inner: string) => {
+    let replaced = inner;
+    // Remove a <tr><td colspan=4> ... TOTAL INVESTMENT ... </td></tr> row variant
+    replaced = replaced.replace(
+      /<tr[^>]*>\s*<td[^>]*colspan=["']?4["']?[^>]*>\s*<b>\s*<u>\s*<span[^>]*>\s*TOTAL\s+INVESTMENT\s*:?\s*<\/span>\s*<\/u>\s*<\/b>\s*<\/td>\s*<\/tr>/gi,
+      ""
+    );
+    // Also catch a standalone TD cell when the row isn’t wrapped in <tr> (Word quirks)
+    replaced = replaced.replace(
+      /<td[^>]*colspan=["']?4["']?[^>]*>\s*<b>\s*<u>\s*<span[^>]*>\s*TOTAL\s+INVESTMENT\s*:?\s*<\/span>\s*<\/u>\s*<\/b>\s*<\/td>/gi,
+      ""
+    );
+    return replaced;
+  });
+  // Scoped cleanup: remove stray TOTAL INVESTMENT rows without a $amount ONLY within siding sections
+  const stripTotalRows = (html: string): string => {
+    return String(html || "").replace(
+      /<tr[^>]*>\s*<td[^>]*>\s*(?:<[^>]+>\s*)*TOTAL\s+INVESTMENT\s*[:\-–—]?\s*(?:<[^>]+>\s*)*<\/td>\s*<\/tr>/gi,
+      (row: string) => (/\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/.test(row) ? row : "")
+    );
+  };
+  // Synthetic section wrappers
+  out = out.replace(/\{#show_siding_synthetic\}([\s\S]*?)\{\/show_siding_synthetic\}/gi, (m: string, inner: string) => {
+    const amt = String(
+      docxData.siding_synthetic_subtotal || docxData.siding_synthetic_subTotal || docxData.siding_synthetic_total || ""
+    );
+    let replaced = inner
+      .replace(/\{siding_sub[Tt]otal\}/g, amt ? escapeHtml(amt) : "")
+      .replace(/\{siding_total\}/g, amt ? escapeHtml(amt) : "");
+    // Robust: also enforce TOTAL line in case tokens were split or the row didn't render
+  replaced = enforceTotalLine(replaced, amt);
+  // Siding-only cleanup to drop orphan TOTAL INVESTMENT rows without an amount
+  replaced = stripTotalRows(replaced);
+    return replaced;
+  });
   // Cedar section wrappers
   out = out.replace(/\{#show_siding_cedarShake\}([\s\S]*?)\{\/show_siding_cedarShake\}/gi, (m: string, inner: string) => {
     const amt = secAmt.cedar || "";
-    const replaced = inner
+    let replaced = inner
       .replace(/\{siding_sub[Tt]otal\}/g, amt ? escapeHtml(amt) : "")
       .replace(/\{siding_total\}/g, amt ? escapeHtml(amt) : "");
+  replaced = enforceTotalLine(replaced, amt);
+  replaced = stripTotalRows(replaced);
     return replaced;
   });
   // Vinyl section wrappers
   out = out.replace(/\{#show_siding_vinyl\}([\s\S]*?)\{\/show_siding_vinyl\}/gi, (m: string, inner: string) => {
     const amt = secAmt.vinyl || "";
-    const replaced = inner
+    let replaced = inner
       .replace(/\{siding_sub[Tt]otal\}/g, amt ? escapeHtml(amt) : "")
       .replace(/\{siding_total\}/g, amt ? escapeHtml(amt) : "");
+  replaced = enforceTotalLine(replaced, amt);
+  replaced = stripTotalRows(replaced);
     return replaced;
   });
   // Clap Board section wrappers
   out = out.replace(/\{#show_siding_clapBoard\}([\s\S]*?)\{\/show_siding_clapBoard\}/gi, (m: string, inner: string) => {
     const amt = secAmt.clap || "";
-    const replaced = inner
+    let replaced = inner
       .replace(/\{siding_sub[Tt]otal\}/g, amt ? escapeHtml(amt) : "")
       .replace(/\{siding_total\}/g, amt ? escapeHtml(amt) : "");
+  replaced = enforceTotalLine(replaced, amt);
+  replaced = stripTotalRows(replaced);
     return replaced;
   });
   // If a stray closing show_siding_synthetic remains, inject a total pill there
@@ -1241,6 +1321,33 @@ export function renderProposalTemplate(html: string, view: WebProposal, snap: an
     }
     out = out.replace(/\{\/show_siding_synthetic\}/gi, pill);
     out = out.replace(/<span[^>]*display:inline-flex[^>]*>([\s\S]*?TOTAL INVESTMENT:[\s\S]*?)<\/span>/gi, '$1');
+  }
+  // Mirror pill fallback for Cedar Shake
+  if (/\{\/show_siding_cedarShake\}/i.test(out)) {
+    const amt = String(docxData.siding_cedar_subtotal || docxData.siding_cedar_subTotal || docxData.siding_cedar_total || "");
+    let pill = "";
+    if (amt) {
+      pill = `<p style="text-align:center;margin:8px 0 6px 0"><strong style="font-size:1.2em;">TOTAL INVESTMENT:</strong> <span class="cedar-total-amount">${escapeHtml(amt)}</span></p>`;
+    }
+    out = out.replace(/\{\/show_siding_cedarShake\}/gi, pill);
+  }
+  // Mirror pill fallback for Vinyl
+  if (/\{\/show_siding_vinyl\}/i.test(out)) {
+    const amt = String(docxData.siding_vinyl_subtotal || docxData.siding_vinyl_subTotal || docxData.siding_vinyl_total || "");
+    let pill = "";
+    if (amt) {
+      pill = `<p style="text-align:center;margin:8px 0 6px 0"><strong style="font-size:1.2em;">TOTAL INVESTMENT:</strong> <span class="vinyl-total-amount">${escapeHtml(amt)}</span></p>`;
+    }
+    out = out.replace(/\{\/show_siding_vinyl\}/gi, pill);
+  }
+  // Mirror pill fallback for Clap Board
+  if (/\{\/show_siding_clapBoard\}/i.test(out)) {
+    const amt = String(docxData.siding_clap_subtotal || docxData.siding_clap_subTotal || docxData.siding_clap_total || "");
+    let pill = "";
+    if (amt) {
+      pill = `<p style="text-align:center;margin:8px 0 6px 0"><strong style="font-size:1.2em;">TOTAL INVESTMENT:</strong> <span class="clap-total-amount">${escapeHtml(amt)}</span></p>`;
+    }
+    out = out.replace(/\{\/show_siding_clapBoard\}/gi, pill);
   }
   // Final cleanup of any remaining synthetic tokens (render raw amount or drop)
   out = out.replace(/\{siding_synthetic_[a-zA-Z0-9_.]+\}/g, (m) => {
@@ -1267,6 +1374,9 @@ export function renderProposalTemplate(html: string, view: WebProposal, snap: an
   out = normalizeTables(out);
   // Expand the yellow COLOR blank only in the Synthetic Siding section
   out = expandSyntheticSidingColorBlank(out);
+
+  // Global cleanup removed: avoid deleting legitimate roofing GBB rows
+
   return out;
 }
 

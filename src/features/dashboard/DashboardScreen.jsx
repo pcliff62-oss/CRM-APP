@@ -1,11 +1,11 @@
 import React, { useMemo, useState } from 'react'
 import Diagnostics from '../diagnostics/Diagnostics.jsx'
+import WeatherWidget from '@/features/weather/WeatherWidget.jsx'
 
 export default function DashboardScreen() {
-  // UI state (local only; data wiring later)
   const [salesOpen, setSalesOpen] = useState(false)
+  const [weatherOpen, setWeatherOpen] = useState(true)
 
-  // Fake preview data (replace later)
   const today = useMemo(() => ({
     upcomingInstall: { addr: '6 Buckingham Rd, Dennis', time: '8:00 AM' },
     appts: [
@@ -19,11 +19,15 @@ export default function DashboardScreen() {
     weatherPill: '20% rain',
   }), [])
 
-  const tasks = useMemo(() => ([
+  const [tasks, setTasks] = useState([
     { id: 't1', text: 'Order white cedar shingles', urgency: 'high' },
     { id: 't2', text: 'Confirm dumpster drop', urgency: 'med' },
     { id: 't3', text: 'Upload roofer.com PDF for Mucciarone', urgency: 'low' },
-  ]), [])
+  ])
+
+  function pushSystemTask(msg){
+    setTasks(prev => [{ id: `sys-${Date.now()}`, text: msg, urgency: 'low' }, ...prev])
+  }
 
   const sales = useMemo(() => ({
     sold: '$124,500',
@@ -45,7 +49,7 @@ export default function DashboardScreen() {
     { key:'quick', label:'Quick Note', count: 0 },
     { key:'sales', label:'Sales & Commissions', count: 0, onClick: () => setSalesOpen(s=>!s) },
     { key:'calc', label:'Hytech Calculator', count: 0 },
-    { key:'weather', label:'Hytech Weather App', count: 0 },
+    { key:'weather', label:'Weather Forecast', count: 0, onClick: () => setWeatherOpen(o=>!o) },
   ]
 
   return (
@@ -57,6 +61,13 @@ export default function DashboardScreen() {
           <GlassTile key={t.key} label={t.label} count={t.count} onClick={t.onClick} />
         ))}
       </div>
+
+      {/* Render WeatherWidget when weather tile is clicked */}
+      {weatherOpen && (
+        <div className="mt-3">
+          <WeatherWidget onShiftComplete={(msg)=> pushSystemTask(msg)} />
+        </div>
+      )}
 
       {/* Expand area for sales metrics when opened */}
       {salesOpen && (
@@ -70,6 +81,19 @@ export default function DashboardScreen() {
           </div>
         </div>
       )}
+
+      {/* Simple tasks list panel */}
+      <div className="mt-3 rounded-2xl border border-neutral-200 bg-white shadow-sm p-4">
+        <div className="text-base font-semibold mb-2">Tasks</div>
+        <ul className="space-y-1 text-sm">
+          {tasks.map(t => (
+            <li key={t.id} className="flex items-center gap-2">
+              <UrgencyPill level={t.urgency} />
+              <span>{t.text}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
 
       {/* Diagnostics at the very bottom; keep it small and unobtrusive */}
       <div className="mt-6 mb-16">

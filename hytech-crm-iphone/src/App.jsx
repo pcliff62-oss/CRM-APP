@@ -11,7 +11,7 @@ import DocumentsGrid from './features/files/DocumentsGrid.jsx'
 import PhotosGrid from './features/files/PhotosGrid.jsx'
 import FileViewer from './features/files/FileViewer.jsx'
 import MeasureEditor from './features/measure/MeasureEditor.jsx'
-import { createMeasurementFromAddress, fetchUsers, setUserEmail } from './lib/api.js'
+import { createMeasurementFromAddress, fetchUsers, setUserEmail, setUserName } from './lib/api.js'
 import CustomerDetail from './features/customers/CustomerDetail.jsx'
 import { fetchAppointments, fetchCustomers, upsertAppointment, deleteAppointment, upsertCustomer, fetchCustomer, deleteCustomer, fetchLeads } from './lib/api.js'
 
@@ -49,6 +49,11 @@ export default function App() {
   const [fileCtx, setFileCtx] = useState({ list: [], file: null })
   const [measureCtx, setMeasureCtx] = useState({ id: null, imageSrc: '', features: [], gsdMPerPx: null })
   const [crewSelectedDay, setCrewSelectedDay] = useState('')
+  // Mini month calendar navigation state
+  const [miniCalMonth, setMiniCalMonth] = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d })
+  const goMiniPrev = () => setMiniCalMonth(m => { const d=new Date(m.getFullYear(), m.getMonth()-1, 1); d.setHours(0,0,0,0); return d })
+  const goMiniNext = () => setMiniCalMonth(m => { const d=new Date(m.getFullYear(), m.getMonth()+1, 1); d.setHours(0,0,0,0); return d })
+  useEffect(()=>{ setCrewSelectedDay('') }, [miniCalMonth])
   const [pastJobs, setPastJobs] = useState([])
   const [showPastJobs, setShowPastJobs] = useState(false)
   const [newLeadOpen, setNewLeadOpen] = useState(false)
@@ -93,6 +98,11 @@ export default function App() {
     }
     load()
   }, [user.id, role, users])
+
+  // Ensure mobile API helper sends a human name header for attribution
+  useEffect(() => {
+    try { setUserName(user.name || user.id) } catch {}
+  }, [user.name, user.id])
   const goHome = () => { setView({ id:'home' }); setDraft(null) }
 
   const onPlus = () => {
@@ -300,7 +310,8 @@ export default function App() {
               const nextUser = found ? { id: found.email || found.id, name: found.name || found.email || found.id, role: found.role || 'ADMIN' } : { id: val, name: val.split('@')[0], role: 'ADMIN' }
               setUser(nextUser)
               setRole(nextUser.role || 'ADMIN')
-              setUserEmail(nextUser.id).catch(()=>{})
+              setUserEmail(nextUser.id)
+              setUserName(nextUser.name || nextUser.id)
             }}
             className="h-8 px-2 rounded border border-neutral-300 bg-white text-sm"
           >
@@ -513,9 +524,9 @@ export default function App() {
                           return out
                         }
                         const expanded = expand(appts)
-                        const now = new Date()
-                        const year = now.getFullYear()
-                        const month = now.getMonth()
+                        // Use navigated month instead of fixed current month
+                        const year = miniCalMonth.getFullYear()
+                        const month = miniCalMonth.getMonth()
                         const first = new Date(year, month, 1)
                         const startDay = first.getDay()
                         const daysInMonth = new Date(year, month+1, 0).getDate()
@@ -564,6 +575,11 @@ export default function App() {
                         while (cells.length) rows.push(cells.splice(0,7))
                         return (
                           <>
+                            <div className="flex items-center justify-between px-3 pt-3 text-xs font-semibold select-none">
+                              <button onClick={goMiniPrev} className="px-2 py-1 rounded hover:bg-neutral-100 active:bg-neutral-200" aria-label="Previous Month">◀</button>
+                              <div>{miniCalMonth.toLocaleDateString(undefined,{ month:'long', year:'numeric' })}</div>
+                              <button onClick={goMiniNext} className="px-2 py-1 rounded hover:bg-neutral-100 active:bg-neutral-200" aria-label="Next Month">▶</button>
+                            </div>
                             <div className="grid grid-cols-7 gap-0 px-3 pb-3 text-xs select-none">
                               {['S','M','T','W','T','F','S'].map(l => <div key={l} className="text-neutral-400 text-center py-1">{l}</div>)}
                               {rows.flat().map((c, i) => (
@@ -670,7 +686,7 @@ export default function App() {
                                     ))}
                                   </div>
                                   <div className="mt-2 text-xs space-y-1">
-                                    <div className="flex justify-between"><span className="text-neutral-600">Rate</span><span>{j.ratePerSquare ? (Number(j.ratePerSquare)).toLocaleString('en-US',{style:'currency',currency:'USD'}) : '—'} / sq{j.rateTier ? ` (${j.rateTier})` : ''}</span></div>
+                                    <div className="flex justify-between"><span className="text-neutral-600">Rate</span><span>{j.ratePerSquare ? (Number(j.ratePerSquare)).toLocaleString('en-US',{style:'currency',currency:'USD'}) : '—'} / sq</span></div>
                                     <div className="flex justify-between"><span className="text-neutral-600">Install ({(Number(j.usedSquares ?? j.squares)||0).toFixed(1)} sq × ${Number(j.ratePerSquare || 0).toFixed(0)})</span><span className="font-medium">{Number(j.installTotal ?? 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span></div>
                                     <div className="flex justify-between"><span className="text-neutral-600">Extras</span><span className="font-medium">{Number(j.extrasTotal ?? 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span></div>
                                     <div className="border-t pt-1 flex justify-between font-semibold text-sm">
@@ -693,6 +709,7 @@ export default function App() {
             {tab === 'calendar' && (
               <CalendarScreen
                 appts={appts}
+                crewMode={role === 'CREW'}
                 onSelect={onSelectAppt}
                 onOpenCustomer={onOpenApptCustomer}
                 reload={() => {
@@ -712,7 +729,19 @@ export default function App() {
           </>
         )}
         {view.id==='appt-edit' && (
-          <AppointmentEditor initial={draft} onSave={saveAppt} onCancel={goHome} onDelete={removeAppt} />
+          <AppointmentEditor
+            initial={draft}
+            users={users}
+            assignedName={(() => {
+              const id = draft?.assignedTo || draft?.userId || ''
+              if (!id) return ''
+              const match = users.find(u => (u.email || u.id) === id)
+              return match?.name || id
+            })()}
+            onSave={saveAppt}
+            onCancel={goHome}
+            onDelete={removeAppt}
+          />
         )}
         {view.id==='jobs-list' && (
           <JobsList items={appts} onSelect={onSelectJob} onBack={goHome} />
@@ -727,13 +756,14 @@ export default function App() {
             onSave={saveCustomer}
             onCancel={goHome}
             onDelete={removeCustomer}
+            commissionPercentUser={(() => { const u = users.find(u => (u.email || u.id) === user.id); const v = Number(u?.commissionPercent); return (Number.isFinite(v) && v > 0) ? v : 10 })()}
             onOpenDocuments={(docs)=>{ setFileCtx({ list: docs||[], file: null }); setView({ id:'documents' }) }}
             onOpenPhotos={(photos)=>{ setFileCtx({ list: photos||[], file: null }); setView({ id:'photos' }) }}
-            onStartMeasure={async ({ address }={}) => {
+      onStartMeasure={async ({ address }={}) => {
               try {
                 const a = (address || '').trim()
                 if (!a) { alert('No address available for this customer.'); return }
-                const res = await createMeasurementFromAddress(a)
+        const res = await createMeasurementFromAddress(a, draft?.leadId)
                 const id = res?.measurementId
                 const src = res?.sourceImagePath
                 const gsdMPerPx = res?.gsdMPerPx ?? null
@@ -754,6 +784,7 @@ export default function App() {
         {view.id==='crew-job' && (
           <CrewJobDetail
             job={draft}
+            userRate={(() => { const u = users.find(u => (u.email || u.id) === user.id); return (u && Number(u.ratePerSquare)) || 0 })()}
             onBack={goHome}
             onUpdated={(updated) => {
               setDraft(updated)
@@ -762,13 +793,6 @@ export default function App() {
             onComplete={async (submitted) => {
               // reflect returned fields in appointments
               setAppts(prev => prev.map(a => a.id === submitted.id ? { ...a, ...submitted } : a))
-              // update lead stage
-              try {
-                const leadId = submitted.customerId || submitted.contactId
-                if (leadId) {
-                  await fetch('/api/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: leadId, stage: 'COMPLETED' }) })
-                }
-              } catch {}
               // refetch past jobs (most recent first)
               try {
                 const r = await fetch(`/api/past-jobs?assignedTo=${encodeURIComponent(user.id)}`)
@@ -788,6 +812,15 @@ export default function App() {
             imageSrc={measureCtx.imageSrc}
             initialFeatures={measureCtx.features}
             gsdMPerPx={measureCtx.gsdMPerPx}
+            contactId={draft?.id}
+            onReportSaved={async ()=>{
+              try {
+                if (draft?.id) {
+                  const full = await fetchCustomer(draft.id)
+                  setDraft(full || draft)
+                }
+              } catch {}
+            }}
             onBack={()=>{ setView({ id:'customer-detail' }) }}
           />
         )}

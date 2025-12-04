@@ -3,9 +3,14 @@
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '').trim()
 // Dev auth helper: tell the Next API which user to assume (aligns with demo auth in src/lib/auth.ts)
 let CURRENT_USER_EMAIL = (import.meta.env.VITE_USER_EMAIL ?? 'demo@hytech.local').trim()
+let CURRENT_USER_NAME = (import.meta.env.VITE_USER_NAME ?? '').trim()
 
 export function setUserEmail(email) {
   if (typeof email === 'string' && email.trim()) CURRENT_USER_EMAIL = email.trim()
+}
+
+export function setUserName(name) {
+  if (typeof name === 'string' && name.trim()) CURRENT_USER_NAME = name.trim()
 }
 
 async function get(path, params = {}) {
@@ -13,21 +18,21 @@ async function get(path, params = {}) {
     ? new URL(API_BASE.replace(/\/$/,'') + path)
     : new URL(path, window.location.origin)
   Object.entries(params).forEach(([k,v]) => { if (v!=null && v!=='') url.searchParams.set(k, String(v)) })
-  const r = await fetch(url.toString(), { headers: { 'x-user-email': CURRENT_USER_EMAIL } })
+  const r = await fetch(url.toString(), { headers: { 'x-user-email': CURRENT_USER_EMAIL, 'x-user-name': CURRENT_USER_NAME } })
   if (!r.ok) throw new Error(`GET ${path} ${r.status}`)
   return r.json()
 }
 
 async function post(path, body = {}) {
   const url = API_BASE ? (API_BASE.replace(/\/$/,'') + path) : path
-  const r = await fetch(url, { method:'POST', headers: { 'Content-Type':'application/json', 'x-user-email': CURRENT_USER_EMAIL }, body: JSON.stringify(body) })
+  const r = await fetch(url, { method:'POST', headers: { 'Content-Type':'application/json', 'x-user-email': CURRENT_USER_EMAIL, 'x-user-name': CURRENT_USER_NAME }, body: JSON.stringify(body) })
   if (!r.ok) throw new Error(`POST ${path} ${r.status}`)
   return r.json()
 }
 
 async function del(path) {
   const url = API_BASE ? (API_BASE.replace(/\/$/,'') + path) : path
-  const r = await fetch(url, { method:'DELETE', headers: { 'x-user-email': CURRENT_USER_EMAIL } })
+  const r = await fetch(url, { method:'DELETE', headers: { 'x-user-email': CURRENT_USER_EMAIL, 'x-user-name': CURRENT_USER_NAME } })
   if (!r.ok) throw new Error(`DELETE ${path} ${r.status}`)
   return r.json()
 }
@@ -59,9 +64,11 @@ export async function fetchUsers() {
 }
 
 // Measurements
-export async function createMeasurementFromAddress(address) {
+export async function createMeasurementFromAddress(address, leadId) {
   if (!address || !String(address).trim()) throw new Error('Address is required')
-  return post('/api/measurements/create-from-satellite', { address: String(address).trim() })
+  const payload = { address: String(address).trim() }
+  if (leadId) payload.leadId = leadId
+  return post('/api/measurements/create-from-satellite', payload)
 }
 
 export async function recomputeMeasurement(id, features, defaultPitchIn12 = 6) {
@@ -78,3 +85,8 @@ export async function submitJob(id, { squares, extras, attachments } = {}) {
   return post(`/api/jobs/${encodeURIComponent(id)}/submit`, { squares, extrasJson, attachments }).then(d => d.item)
 }
 export async function shiftJobs(days) { return post('/api/jobs/shift', { days }).then(d => d) }
+
+// Sales Payment Requests
+export async function createSalesPaymentRequest(payload = {}) {
+  return post('/api/sales-payment-requests', payload).then(d => d.item)
+}

@@ -239,3 +239,39 @@ The current worker uses heuristic segmentation (GrabCut + vegetation masking + H
 ### Safety / Fallbacks
 
 If the worker or env var is missing, `AI Detect` returns an error and no polygons are added; manual drawing continues unaffected.
+
+## Weather Forecast & Auto Job Shifting
+
+The dashboard now includes a Weather Forecast widget (toggle via the Weather Forecast tile). It shows a 10-day precipitation probability based on the company ZIP set in Settings > Company Info.
+
+Data Source:
+
+- Geocoding: zippopotam.us (ZIP -> lat/lon)
+- Forecast: open-meteo.com daily precipitation probability, temperature highs/lows, weather code.
+
+Highlighting:
+
+- Days with ≥70% precipitation probability are highlighted.
+
+Auto-Shift Logic:
+
+- API endpoint: `POST /api/weather/shift-jobs`
+- Loads 10-day forecast and shifts any upcoming all-day job appointments (title starts with `JOB` or has `jobStatus`) whose start date has ≥70% precipitation probability.
+- Shifts forward one day at a time until the start date precipitation probability is below threshold or forecast horizon is exceeded.
+- Non-job appointments are never moved.
+
+Manual Trigger:
+
+You can invoke the shift manually (e.g., from a scheduled job or script) by POSTing to the endpoint after authentication cookies are present:
+
+```
+fetch('/api/weather/shift-jobs', { method: 'POST' })
+  .then(r => r.json())
+  .then(console.log);
+```
+
+Future Enhancements:
+
+- Add UI button in WeatherWidget for on-demand shift.
+- Persist shift audit log entries.
+- Allow custom threshold per tenant.

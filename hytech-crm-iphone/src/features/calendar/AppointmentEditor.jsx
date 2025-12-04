@@ -7,7 +7,7 @@ const typeOptions = [
   { id: 'other', label: 'Other' },
 ]
 
-export default function AppointmentEditor({ initial, onSave, onCancel, onDelete }) {
+export default function AppointmentEditor({ initial, onSave, onCancel, onDelete, assignedName, users = [] }) {
   const seed = useMemo(() => ({
     id: initial?.id,
     title: initial?.title || '',
@@ -32,7 +32,22 @@ export default function AppointmentEditor({ initial, onSave, onCancel, onDelete 
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
+      {/* Assigned user banner */}
+      {(() => {
+        // Attempt multiple field names for assigned identity
+        const possible = [initial?.assignedTo, initial?.userId, initial?.salesUserId, initial?.crewUserId, form.assignedTo]
+        const id = possible.find(v => !!v) || ''
+        const userMatch = users.find(u => (u.email || u.id) === id)
+        const display = (assignedName || userMatch?.name || id || '').trim()
+        if (!display) return null
+        return (
+          <div className="px-3 py-2 rounded-lg bg-neutral-900 text-white flex items-center justify-between">
+            <div className="text-xs font-semibold tracking-wide">Assigned: {display}</div>
+            {id && id !== display && <div className="text-[10px] opacity-70">{id}</div>}
+          </div>
+        )
+      })()}
       <Field label="Title">
         <input className="w-full border rounded-lg px-3 py-2" value={form.title} onChange={e=>set('title', e.target.value)} />
       </Field>

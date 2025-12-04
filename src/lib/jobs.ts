@@ -272,21 +272,21 @@ export async function backfillApprovedJobs(leadIds: string[]): Promise<{ process
   return { processed: leadIds.length, created };
 }
 
-// Pricing aggregation for a lead: base approved contract price + any extras from:
+// Pricing aggregation for a lead: base approved contract price + SALES extras only.
+// Includes:
 // 1) lead.extrasJson (sales-managed pre-job extras)
-// 2) latest job appointment extrasJson (crew-added extras during job)
+// 2) latest SalesPaymentRequest.extrasJson (submitted by sales)
+// Excludes crew-added job/appointment extras (those apply only to crew payment amounts).
 // Returns structured breakdown for UI.
 export async function pricingBreakdownForLead(leadId: string): Promise<{
   contractPrice: number | null;
   extras: { title?: string; price?: number; [k: string]: any }[];
   extrasTotal: number;
   grandTotal: number | null;
-  source: 'none' | 'lead' | 'appointment' | 'both';
+  source: 'none' | 'lead' | 'spr' | 'lead+spr';
 }> {
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { contractPrice: true, extrasJson: true, tenantId: true } });
   if (!lead) return { contractPrice: null, extras: [], extrasTotal: 0, grandTotal: null, source: 'none' };
-  // Latest all-day job appointment (could have crew extras)
-  const appt = await prisma.appointment.findFirst({ where: { leadId, allDay: true }, orderBy: { start: 'desc' }, select: { extrasJson: true, id: true } });
   const parse = (raw: string | null | undefined): any[] => {
     if (!raw) return [];
     try {
@@ -295,18 +295,24 @@ export async function pricingBreakdownForLead(leadId: string): Promise<{
     } catch { return []; }
   };
   const leadExtras = parse(lead.extrasJson).filter((x:any)=> x && typeof x === 'object');
-  const apptExtras = parse(appt?.extrasJson || null).filter((x:any)=> x && typeof x === 'object');
-  // Merge by simple concatenation; duplicates are allowed (distinct crew vs sales items)
-  const extras = [...leadExtras, ...apptExtras];
-  const extrasTotal = extras.reduce((sum:number,x:any)=> sum + (isFinite(Number(x.price)) ? Number(x.price) : 0), 0);
+  // Pull latest Sales Payment Request for this lead and include its extras (sales-submitted)
+  const spr = await prisma.salesPaymentRequest.findFirst({ where: { leadId }, orderBy: { createdAt: 'desc' }, select: { extrasJson: true } }) as any;
+  const sprExtras = parse(spr?.extrasJson || null).filter((x:any)=> x && typeof x === 'object');
+  // Prefer latest SPR extras if any, else fall back to lead extras (avoid double counting)
+  const extras = sprExtras.length > 0 ? sprExtras : leadExtras;
+  const extrasTotal = extras.reduce((sum:number,x:any)=> {
+    const qty = Number((x as any)?.qty ?? 1) || 1;
+    const price = Number((x as any)?.price) || 0;
+    return sum + qty * price;
+  }, 0);
   const contractPrice = typeof lead.contractPrice === 'number' && isFinite(lead.contractPrice) ? lead.contractPrice : null;
   const grandTotal = contractPrice !== null ? contractPrice + extrasTotal : null;
-  const source: 'none' | 'lead' | 'appointment' | 'both' = (() => {
+  const source: 'none' | 'lead' | 'spr' | 'lead+spr' = (() => {
     const hasLead = leadExtras.length > 0;
-    const hasAppt = apptExtras.length > 0;
-    if (hasLead && hasAppt) return 'both';
+    const hasSpr = sprExtras.length > 0;
+    // When both exist we display only SPR extras, but mark the source accordingly if needed
+    if (hasSpr) return hasLead ? 'lead+spr' : 'spr';
     if (hasLead) return 'lead';
-    if (hasAppt) return 'appointment';
     return 'none';
   })();
   return { contractPrice, extras, extrasTotal, grandTotal, source };

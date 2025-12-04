@@ -83,11 +83,28 @@ export async function POST(req: NextRequest) {
     const publicUrl = `/uploads/${tenantId}/measurements/${filename}`;
 
     const metersPerPixel = (Math.cos(latlng.lat * Math.PI/180) * 156543.03392) / (Math.pow(2, zoom) * scale);
+    // Build address snapshot fallback (if no property relation will supply later)
+    let addressSnapshot: string | undefined = undefined;
+    if (propertyId) {
+      try {
+        const prop = await prisma.property.findUnique({ where: { id: propertyId } });
+        if (prop) {
+          const line1 = [prop.address1, prop.address2].filter(Boolean).join(' ').trim();
+          const cityStatePostal = [prop.city, [prop.state, prop.postal].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+          addressSnapshot = [line1, cityStatePostal].filter(Boolean).join(', ');
+        }
+      } catch {}
+    } else if (address) {
+      // Raw address provided directly
+      addressSnapshot = address.trim();
+    }
+
     const m = await prisma.measurement.create({
       data: {
         tenantId,
         leadId: leadId || null,
         propertyId,
+        addressSnapshot,
         geojson: JSON.stringify({ type: 'FeatureCollection', features: [] }),
         sourceImagePath: publicUrl,
         gsdMPerPx: metersPerPixel,

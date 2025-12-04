@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useMemo, useState } from 'react'
 
-type Rep = { id: string; name: string; commissionPercent?: number|null; basePayAmount?: number|null; basePayPeriod?: 'JOB'|'WEEK'|'MONTH'|null; docs?: { type: string; path: string; name?: string }[]; source?: 'user' }
+type Rep = { id: string; name: string; commissionPercent?: number|null; docs?: { type: string; path: string; name?: string }[]; source?: 'user' }
 
 function DocsList({ rep }: { rep: Rep }){
   const [docs, setDocs] = useState(rep.docs||[])
@@ -52,7 +52,7 @@ export default function SalesManager(){
             <tr>
               <th className="text-left px-3 py-2">Name</th>
               <th className="text-left px-3 py-2">Commission %</th>
-              <th className="text-left px-3 py-2">Base Pay</th>
+              {/* Base Pay column removed */}
               <th className="text-left px-3 py-2">Documents</th>
             </tr>
           </thead>
@@ -63,9 +63,7 @@ export default function SalesManager(){
                 <td className="px-3 py-2 w-48">
                   <CommissionEditor rep={rep} onSaved={(pct)=> setItems(prev => prev.map(it => it.id===rep.id ? { ...it, commissionPercent: pct } : it))} />
                 </td>
-                <td className="px-3 py-2 w-[340px]">
-                  <BasePayEditor rep={rep} onSaved={(amt, per)=> setItems(prev => prev.map(it => it.id===rep.id ? { ...it, basePayAmount: amt, basePayPeriod: per } : it))} />
-                </td>
+                {/* Base Pay cell removed */}
                 <td className="px-3 py-2"><DocsList rep={rep} /></td>
               </tr>
             ))}
@@ -119,36 +117,4 @@ function CommissionEditor({ rep, onSaved }: { rep: Rep; onSaved: (pct:number|nul
   )
 }
 
-function BasePayEditor({ rep, onSaved }: { rep: Rep; onSaved: (amount:number|null, period:Rep['basePayPeriod'])=>void }){
-  const [amount, setAmount] = useState<string>(rep.basePayAmount==null ? '' : String(rep.basePayAmount))
-  const [period, setPeriod] = useState<Rep['basePayPeriod']>(rep.basePayPeriod ?? 'JOB')
-  const [saving, setSaving] = useState(false)
-  const dirty = (rep.basePayAmount==null ? '' : String(rep.basePayAmount)) !== amount || (rep.basePayPeriod ?? 'JOB') !== period
-  async function save(){
-    const num = amount==='' ? 0 : Number(amount)
-    if (Number.isNaN(num)) { alert('Enter a number'); return }
-    setSaving(true)
-    try {
-      const r = await fetch(`/api/sales/${encodeURIComponent(rep.id)}`, { method:'PATCH', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ basePayAmount: Math.max(0,num), basePayPeriod: period }) })
-      const j = await r.json().catch(()=>({})) as any
-      if (!r.ok || j?.ok===false) { alert(j?.error||'Save failed'); setSaving(false); return }
-      onSaved(Math.max(0,num), period)
-      setSaving(false)
-    } catch (e) {
-      console.warn('base pay save error', e)
-      setSaving(false)
-    }
-  }
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-slate-500">$</span>
-      <input type="number" step="0.01" min={0} value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00" className="h-9 w-28 border rounded-md px-2" />
-      <select value={period ?? 'JOB'} onChange={e=>setPeriod(e.target.value as any)} className="h-9 border rounded-md px-2">
-        <option value="JOB">per Job</option>
-        <option value="WEEK">per Week</option>
-        <option value="MONTH">per Month</option>
-      </select>
-      <button onClick={save} disabled={saving || !dirty} className="h-8 px-2 rounded bg-emerald-600 text-white disabled:opacity-50">{saving? 'Saving…':'Save'}</button>
-    </div>
-  )
-}
+// Base pay editor removed

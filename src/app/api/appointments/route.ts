@@ -1,11 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import { daysFromSquares, findSquaresForLead, addWeekdaysExclusive, normalizeJobStart } from "@/lib/jobs";
+import { mapDbToMobileAppt } from "@/lib/mapAppointment";
 import { getCurrentTenantId, getCurrentUser } from "@/lib/auth";
+import { Role } from "@prisma/client";
+import { autoShiftJobs } from '@/lib/autoShiftJobs';
+import { fetch10DayForecast } from '@/lib/weather';
+
+async function fetchOffsetAndForecast(zip: string) {
+  // Reuse existing geocode via weather.ts? Simplicity: call zippopotam.us inline.
+  try {
+    const res = await fetch(`https://api.zippopotam.us/us/${encodeURIComponent(zip)}`);
+    if (!res.ok) return null;
+    const data = await res.json().catch(()=>null);
+    const place = Array.isArray(data?.places) ? data.places[0] : null;
+    const lat = place ? Number(place.latitude) : NaN;
+    const lon = place ? Number(place.longitude) : NaN;
+    if (!isFinite(lat) || !isFinite(lon)) return null;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=precipitation_probability_max&forecast_days=10&timezone=auto`;
+    const w = await fetch(url);
+    if (!w.ok) return null;
+    const json = await w.json().catch(()=>null);
+    return json;
+  } catch { return null; }
+}
 
 export async function GET(req: NextRequest) {
   const tenantId = await getCurrentTenantId(req);
   if (!tenantId) return NextResponse.json({ ok: true, items: [] }, { status: 200 });
+  // Weather auto-shift: run once per UTC day to avoid manual button.
+  try {
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { postal: true, lastWeatherShiftAt: true, lastWeatherShiftDay: true, weatherShiftPendingStatus: true } });
+    const zip = tenant?.postal || '';
+    if (zip) {
+      const now = new Date();
+      const todayIso = now.toISOString().slice(0,10);
+      const lastDay = tenant?.lastWeatherShiftAt ? tenant.lastWeatherShiftAt.toISOString().slice(0,10) : null;
+      if (lastDay !== todayIso) {
+        const raw = await fetchOffsetAndForecast(zip);
+        const days: string[] = raw?.daily?.time || [];
+        const precip: number[] = raw?.daily?.precipitation_probability_max || [];
+        const offset: number | undefined = typeof raw?.utc_offset_seconds === 'number' ? raw.utc_offset_seconds : undefined;
+        const forecast = days.map((d,i)=> ({ date:d, precipProb: Number(precip[i]??0) }));
+        if (forecast.length) {
+          const result = await autoShiftJobs(tenantId, forecast, 70, offset);
+          const payload = { ...result, createdAt: new Date().toISOString() };
+          await prisma.tenant.update({ where: { id: tenantId }, data: {
+            lastWeatherShiftAt: new Date(),
+            lastWeatherShiftDay: (result as any)?.firstRain || null,
+            lastWeatherShiftResultJson: JSON.stringify(result),
+            weatherShiftPendingJson: JSON.stringify(payload),
+            weatherShiftPendingStatus: 'pending'
+          } });
+        }
+      }
+    }
+  } catch {}
   const { searchParams } = new URL(req.url);
   const leadId = searchParams.get("leadId") || undefined;
   const userId = searchParams.get("userId") || undefined;
@@ -165,7 +215,15 @@ export async function POST(req: NextRequest) {
     if (Object.prototype.hasOwnProperty.call(data, 'crewId')) {
       updateData.crewId = data.crewId; // crew assignment separate from sales owner
     }
-    if (Object.prototype.hasOwnProperty.call(data, 'jobStatus')) updateData.jobStatus = data.jobStatus;
+    if (Object.prototype.hasOwnProperty.call(data, 'jobStatus')) {
+      const desired = String(data.jobStatus || '');
+      // Only SALES may mark a job as 'submitted'
+      if (desired.toLowerCase() === 'submitted') {
+        if (user.role === Role.SALES) updateData.jobStatus = 'submitted';
+      } else {
+        updateData.jobStatus = desired;
+      }
+    }
     if (Object.prototype.hasOwnProperty.call(data, 'materialOrdered')) updateData.materialOrdered = !!data.materialOrdered;
     if (Object.prototype.hasOwnProperty.call(data, 'squares')) updateData.squares = data.squares;
     if (Object.prototype.hasOwnProperty.call(data, 'extrasJson')) updateData.extrasJson = typeof data.extrasJson === 'string' ? data.extrasJson : JSON.stringify(data.extrasJson || []);
@@ -213,10 +271,11 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   const tenantId = await getCurrentTenantId(req);
   if (!tenantId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser(req).catch(()=>null as any);
   const data = await req.json();
   if (!data.id) return NextResponse.json({ ok: false, error: "Missing id" }, { status: 400 });
   // Load current to preserve fields not explicitly provided
-  const current = await prisma.appointment.findUnique({ where: { id: data.id }, include: { user: true } });
+  const current = await prisma.appointment.findUnique({ where: { id: data.id }, include: { user: true, lead: true } });
   if (!current) return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
 
   // Resolve user by email (assignedTo) or accept provided userId
@@ -241,7 +300,14 @@ export async function PUT(req: NextRequest) {
   }
   // crewId updated independently
   if (Object.prototype.hasOwnProperty.call(data, 'crewId')) patch.crewId = data.crewId || null;
-  if (Object.prototype.hasOwnProperty.call(data, 'jobStatus')) patch.jobStatus = data.jobStatus || null;
+  if (Object.prototype.hasOwnProperty.call(data, 'jobStatus')) {
+    const desired = String(data.jobStatus || '');
+    if (desired.toLowerCase() === 'submitted') {
+      if ((user as any)?.role === Role.SALES) patch.jobStatus = 'submitted';
+    } else {
+      patch.jobStatus = desired;
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(data, 'materialOrdered')) patch.materialOrdered = !!data.materialOrdered;
   if (Object.prototype.hasOwnProperty.call(data, 'squares')) patch.squares = data.squares;
   if (Object.prototype.hasOwnProperty.call(data, 'extrasJson')) patch.extrasJson = typeof data.extrasJson === 'string' ? data.extrasJson : JSON.stringify(data.extrasJson || []);
@@ -287,6 +353,15 @@ export async function PUT(req: NextRequest) {
   }
 
   const updated = await prisma.appointment.update({ where: { id: data.id }, data: patch });
+  // If appointment notes updated, sync to lead.notes for field app contact card
+  try {
+    if ((Object.prototype.hasOwnProperty.call(data, 'notes') || Object.prototype.hasOwnProperty.call(data, 'description')) && (current.leadId || updated.leadId)) {
+      const nextNotes = (data.notes ?? data.description ?? '') || null;
+      if (nextNotes !== null) {
+        await prisma.lead.update({ where: { id: (current.leadId || updated.leadId)! }, data: { notes: String(nextNotes) } });
+      }
+    }
+  } catch {}
   const full = await prisma.appointment.findUnique({ where: { id: updated.id }, include: { user: true, lead: { include: { contact: true, property: true } } } });
   return NextResponse.json({ ok: true, item: mapDbToMobileAppt(full!) });
 }
@@ -298,72 +373,4 @@ export async function DELETE(req: NextRequest) {
   await prisma.appointment.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }
-
-function parseCategoriesFromTitle(title: string) {
-  const t = (title || '').toLowerCase()
-  const cats: string[] = []
-  if (/roof/i.test(t)) cats.push('Roofing')
-  if (/siding/i.test(t)) cats.push('Siding')
-  if (/deck/i.test(t)) cats.push('Decking')
-  if (/(window|door)/i.test(t)) cats.push('Windows and Doors')
-  return Array.from(new Set(cats))
-}
-
-function mapDbToMobileAppt(a: any) {
-  const rawTitle = typeof a.title === 'string' ? a.title : '';
-  // A job is an all-day multi-day block or explicitly titled JOB: ... or has crew/squares indicators.
-  // Ignore generic jobStatus default so regular 1-hour lead appointments aren't misclassified.
-  const isJob = !!a.allDay || /^JOB:\s*/i.test(rawTitle || '') || (!!a.crewId) || (typeof a.squares === 'number' && isFinite(a.squares) && a.squares > 0);
-  const customerName = a.lead?.contact?.name || '';
-  const contactId = a.lead?.contactId || a.lead?.contact?.id || '';
-  const property = a.lead?.property || null;
-  const addr = property ? [property.address1, property.city, [property.state, property.postal].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
-  const workType = a.lead?.title || (isJob ? 'Job' : 'Appointment');
-  let title = a.title || 'Untitled';
-  if (isJob && typeof title === 'string') {
-    title = title.replace(/(\d+\.\d+)(?=\s*sq\b)/gi, (m) => {
-      const n = parseFloat(m);
-      return isFinite(n) ? n.toFixed(2) : m;
-    });
-  }
-  // Determine squares: prefer stored, else parse from title
-  const squares = ((): number | null => {
-    const v = (a as any).squares;
-    if (typeof v === 'number' && isFinite(v) && v > 0) return v;
-    const mm = typeof a.title === 'string' ? a.title.match(/(\d+(?:\.\d+)?)\s*sq\b/i) : null;
-    if (mm) {
-      const n = parseFloat(mm[1]);
-      if (isFinite(n) && n > 0) return n;
-    }
-    return null;
-  })();
-  const categories = parseCategoriesFromTitle(rawTitle)
-  return {
-    id: a.id,
-    title,
-    type: isJob ? 'install' : 'other',
-    when: new Date(a.start).toISOString(),
-    end: a.end ? new Date(a.end).toISOString() : undefined,
-    allDay: !!a.allDay,
-    location: addr,
-    notes: a.description || '',
-    customerId: a.leadId || '',
-    contactId,
-    assignedTo: a.user?.email || '',
-    job: isJob,
-    customerName,
-    address: addr,
-    workType,
-    crewId: a.crewId || '',
-    jobStatus: a.jobStatus || (isJob ? 'scheduled' : ''),
-    materialOrdered: !!a.materialOrdered,
-    squares,
-    extrasJson: a.extrasJson || '[]',
-    attachmentsJson: a.attachmentsJson || '[]',
-    completedAt: a.completedAt ? new Date(a.completedAt).toISOString() : undefined,
-  assignees: Array.isArray(a.assignees) ? a.assignees.map((x: any) => ({ id: x.userId, email: x.user?.email, name: x.user?.name, role: x.role })) : [],
-  crews: Array.isArray(a.crews) ? a.crews.map((c: any) => ({ id: c.crewId, scopeId: c.scopeId })) : [],
-  scopes: Array.isArray(a.scopes) ? a.scopes.map((s: any) => ({ id: s.id, category: s.category, title: s.title, assignedCrewId: s.assignedCrewId })) : [],
-  categories,
-  };
-}
+// mapping moved to src/lib/mapAppointment

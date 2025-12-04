@@ -14,6 +14,7 @@ function CrewRequests() {
   const [editData, setEditData] = useState<any>({})
   const [markingPaid, setMarkingPaid] = useState(false)
   const [savingEdits, setSavingEdits] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -25,7 +26,14 @@ function CrewRequests() {
         const json = await res.json().catch(() => ({ ok: false }))
         if (active) {
           if (json?.ok) {
-            const all = Array.isArray(json.items) ? json.items : []
+            const all = Array.isArray(json.items) ? json.items.map((it:any)=> {
+              // ensure adjustments object is present if server passed JSON string accidentally
+              let adj = it.adjustments
+              if (!adj && typeof it.adjustmentsJson === 'string') {
+                try { const a = JSON.parse(it.adjustmentsJson); if (a && typeof a==='object') adj = a } catch {}
+              }
+              return { ...it, adjustments: adj }
+            }) : []
             // Exclude sales-tagged requests from crew list
             setItems(all.filter((it:any)=> String(it.rateTier||'').toLowerCase() !== 'sales'))
           }
@@ -41,6 +49,29 @@ function CrewRequests() {
       active = false
     }
   }, [])
+
+  const refresh = async () => {
+    try {
+      setRefreshing(true)
+      setError(null)
+      const res = await fetch('/api/crew-payment-requests', { cache: 'no-store' })
+      const json = await res.json().catch(() => ({ ok: false }))
+      if (json?.ok) {
+        const all = Array.isArray(json.items) ? json.items.map((it:any)=> {
+          let adj = it.adjustments
+          if (!adj && typeof it.adjustmentsJson === 'string') {
+            try { const a = JSON.parse(it.adjustmentsJson); if (a && typeof a==='object') adj = a } catch {}
+          }
+          return { ...it, adjustments: adj }
+        }) : []
+        setItems(all.filter((it:any)=> String(it.rateTier||'').toLowerCase() !== 'sales'))
+      } else {
+        setError(json?.error || 'Failed to load')
+      }
+    } catch (e:any) {
+      setError(String(e?.message||e))
+    } finally { setRefreshing(false) }
+  }
 
   const paidItems = items.filter(i => i.paid)
   const crewNames = Array.from(new Set(paidItems.map(i => i.crewName || 'Crew')))
@@ -86,14 +117,22 @@ function CrewRequests() {
   const startEdit = (it: any) => {
     setEditing(true)
     // Seed editData with computed fields
+    const extras = Array.isArray(it.extras) ? it.extras : []
+    const normalizedExtras = extras.map((x:any)=> ({ title: String(x.title||'').trim(), price: Number(x.price)||0 }))
+    const usedSquares = Number(it.usedSquares||0)
+    const ratePerSquare = Number(it.ratePerSquare||0)
+    const installTotal = usedSquares * ratePerSquare
+    const extrasTotal = normalizedExtras.reduce((s:number,x:any)=> s + (Number(x.price)||0),0)
+    const grandTotal = installTotal + extrasTotal
     setEditData({
       id: it.id,
-      usedSquares: it.usedSquares ?? 0,
-      ratePerSquare: it.ratePerSquare ?? 0,
-      installTotal: it.installTotal ?? (Number(it.usedSquares||0) * Number(it.ratePerSquare||0)),
-      extrasTotal: it.extrasTotal ?? 0,
-      grandTotal: it.grandTotal ?? it.amount ?? 0,
-      amount: it.amount ?? it.grandTotal ?? 0,
+      usedSquares,
+      ratePerSquare,
+      installTotal,
+      extras: normalizedExtras,
+      extrasTotal,
+      grandTotal,
+      amount: grandTotal,
       rateTier: it.rateTier,
       customerName: it.customerName,
       address: it.address
@@ -102,10 +141,13 @@ function CrewRequests() {
   const recalcDerived = (partial: any) => {
     const used = Number(partial.usedSquares||0)
     const rate = Number(partial.ratePerSquare||0)
-    const install = Number.isFinite(Number(partial.installTotal)) ? Number(partial.installTotal) : used * rate
-    const extras = Number(partial.extrasTotal||0)
-    const grand = install + extras
+    // Always recompute install total from used squares × rate
+    const install = used * rate
+    // Sum extras array if present
+    const extrasTotal = Array.isArray(partial.extras) ? partial.extras.reduce((s:number,x:any)=> s + (Number(x.price)||0),0) : 0
+    const grand = install + extrasTotal
     partial.installTotal = install
+    partial.extrasTotal = extrasTotal
     partial.grandTotal = grand
     partial.amount = grand
     return partial
@@ -127,6 +169,9 @@ function CrewRequests() {
       ]
       const staged = recalcDerived({ ...editData })
       for (const f of fields) if (f in staged) payload[f] = staged[f]
+      if (Array.isArray(staged.extras)) {
+        payload.extrasJson = JSON.stringify(staged.extras.map((x:any)=> ({ title: String(x.title||'').trim(), price: Number(x.price)||0 })))
+      }
       const res = await fetch('/api/crew-payment-requests', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -162,6 +207,7 @@ function CrewRequests() {
     <div className="space-y-3">
       <div className="flex items-center gap-3">
         <div className="font-semibold text-lg">Crews</div>
+  <button onClick={refresh} className="text-xs px-2 py-1 rounded border bg-white shadow-sm hover:bg-slate-50">{refreshing? 'Refreshing…':'Refresh'}</button>
         <button
           onClick={() => setShowHistory(true)}
           className="text-xs px-2 py-1 rounded border bg-white shadow-sm hover:bg-slate-50"
@@ -204,7 +250,7 @@ function CrewRequests() {
                   {it.amount ? `$${Number(it.amount).toLocaleString(undefined,{ minimumFractionDigits:2, maximumFractionDigits:2 })}` : '$0.00'}
                 </span>
                 <span className="text-xs text-slate-500">
-                  {it.rateTier || 'tier'} • {new Date(it.createdAt).toLocaleString()} {it.paid && '• Paid'}
+                  {new Date(it.createdAt).toLocaleString()} {it.paid && '• Paid'}
                 </span>
               </div>
               <div className="flex items-center gap-3">
@@ -275,30 +321,43 @@ function CrewRequests() {
                     value={editing ? editData.usedSquares : it.usedSquares}
                     setEditData={(fn:any)=> setEditData((d:any)=> recalcDerived(typeof fn==='function'?fn(d):fn))}
                   />
-                  <Editable
-                    prefix="$"
-                    label="Rate / sq"
-                    field="ratePerSquare"
-                    editing={editing}
-                    value={editing ? editData.ratePerSquare : it.ratePerSquare}
-                    setEditData={(fn:any)=> setEditData((d:any)=> recalcDerived(typeof fn==='function'?fn(d):fn))}
-                  />
-                  <Editable
-                    prefix="$"
-                    label="Install Total"
-                    field="installTotal"
-                    editing={editing}
-                    value={editing ? editData.installTotal : it.installTotal}
-                    setEditData={(fn:any)=> setEditData((d:any)=> recalcDerived(typeof fn==='function'?fn(d):fn))}
-                  />
-                  <Editable
-                    prefix="$"
-                    label="Extras Total"
-                    field="extrasTotal"
-                    editing={editing}
-                    value={editing ? editData.extrasTotal : it.extrasTotal}
-                    setEditData={(fn:any)=> setEditData((d:any)=> recalcDerived(typeof fn==='function'?fn(d):fn))}
-                  />
+                  <div className="space-y-0.5">
+                    <Editable
+                      prefix="$"
+                      label="Rate per sq"
+                      field="ratePerSquare"
+                      editing={editing}
+                      value={editing ? editData.ratePerSquare : it.ratePerSquare}
+                      setEditData={(fn:any)=> setEditData((d:any)=> recalcDerived(typeof fn==='function'?fn(d):fn))}
+                    />
+                    {!editing && (()=>{
+                      const adj = it.adjustments || null
+                      if (!adj || typeof adj !== 'object') return null
+                      const flags = [
+                        adj.doubleLayerRip? 'Double layer rip': null,
+                        adj.steepSlope? 'Steep slope': null,
+                        adj.difficult? 'Difficult': null,
+                      ].filter(Boolean) as string[]
+                      if (!flags.length) return null
+                      const per = Number(adj.adjustmentPerSq)||10
+                      const count = flags.length
+                      const adder = per * count
+                      return (
+                        <div className="text-[11px] text-slate-500">
+                          Adjustments: {flags.join(', ')} ({count} × ${'{'}per{'}'}) → +${'{'}adder.toFixed(2){'}'}/sq
+                        </div>
+                      )
+                    })()}
+                  </div>
+                  {/* Derived, read-only totals */}
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Install Total</span>
+                    <span className="font-medium">${Number(editing? editData.installTotal : (it.installTotal ?? (Number(it.usedSquares||0)*Number(it.ratePerSquare||0)))).toLocaleString(undefined,{ minimumFractionDigits:2, maximumFractionDigits:2 })}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Extras Total</span>
+                    <span className="font-medium">${Number(editing? editData.extrasTotal : (it.extrasTotal ?? 0)).toLocaleString(undefined,{ minimumFractionDigits:2, maximumFractionDigits:2 })}</span>
+                  </div>
                   <div className="border-t pt-2 flex justify-between text-base font-semibold">
                     <span>Grand Total</span>
                     <span>
@@ -306,9 +365,9 @@ function CrewRequests() {
                     </span>
                   </div>
                 </div>
-                <div>
+                <div className="space-y-2">
                   <div className="font-medium mb-1">Extras</div>
-                  {it.extras?.length ? (
+                  {!editing && (it.extras?.length ? (
                     <ul className="space-y-1">
                       {it.extras.map((ex: any, i: number) => (
                         <li key={i} className="flex justify-between border rounded px-2 py-1">
@@ -319,7 +378,38 @@ function CrewRequests() {
                     </ul>
                   ) : (
                     <div className="text-xs text-slate-500">No extras</div>
-                  )}
+                  ))}
+                  {editing && (()=> {
+                    const extras = Array.isArray(editData.extras)? editData.extras: []
+                    return (
+                      <div className="space-y-2">
+                        {extras.map((ex:any,i:number)=> (
+                          <div key={i} className="flex items-center gap-2">
+                            <input
+                              className="flex-1 border rounded px-1 py-0.5 text-xs"
+                              value={ex.title}
+                              placeholder="Title"
+                              onChange={e=> setEditData((d:any)=> recalcDerived({ ...d, extras: d.extras.map((x:any,idx:number)=> idx===i? { ...x, title:e.target.value }: x) }))}
+                            />
+                            <input
+                              className="w-24 text-right border rounded px-1 py-0.5 text-xs"
+                              value={ex.price}
+                              placeholder="0"
+                              onChange={e=> setEditData((d:any)=> recalcDerived({ ...d, extras: d.extras.map((x:any,idx:number)=> idx===i? { ...x, price:e.target.value }: x) }))}
+                            />
+                            <button
+                              onClick={()=> setEditData((d:any)=> recalcDerived({ ...d, extras: d.extras.filter((_:any,idx:number)=> idx!==i) }))}
+                              className="text-xs px-2 py-1 rounded border bg-white"
+                            >✕</button>
+                          </div>
+                        ))}
+                        <button
+                          onClick={()=> setEditData((d:any)=> recalcDerived({ ...d, extras: [...(Array.isArray(d.extras)? d.extras: []), { title:'', price:0 }] }))}
+                          className="text-xs px-3 py-1 rounded border bg-white"
+                        >Add Extra</button>
+                      </div>
+                    )
+                  })()}
                 </div>
               </div>
               <div>
@@ -435,6 +525,7 @@ function Editable({ label, field, value, editing, setEditData, prefix = '' }: an
         <input
           className="w-24 text-right border rounded px-1 py-0.5 text-xs"
           value={value ?? ''}
+          // Recompute derived totals live on every change
           onChange={e => setEditData((d: any) => ({ ...d, [field]: e.target.value }))}
         />
       ) : (
@@ -467,20 +558,12 @@ function SalesPayroll() {
         if (!active) return
         if (json.ok) {
           const all = Array.isArray(json.items)? json.items: []
-          // Use name when available; fallback to id. Remove 'dd'.
-          setItems(all.map((r:any)=> ({ ...r, salesUserName: (r.salesUserName && r.salesUserName !== 'dd') ? r.salesUserName : undefined })))
-          // Client enrichment for missing names
-          const missing = all.filter((r:any)=> !r.salesUserName && r.salesUserId)
-          for (const m of missing) {
-            try {
-              const ures = await fetch(`/api/users?id=${encodeURIComponent(m.salesUserId)}`, { cache:'no-store' })
-              const uj = await ures.json().catch(()=>({ items:[] }))
-              const user = Array.isArray(uj.items)? uj.items.find((u:any)=> u.id === m.salesUserId): null
-              if (user?.name && user.name.trim().length>2) {
-                setItems(prev=> prev.map(p=> p.id===m.id? { ...p, salesUserName: user.name.trim() }: p))
-              }
-            } catch {}
-          }
+          // Only use server-provided human name; never fallback to id/email
+          setItems(all.map((r:any)=> {
+            const name = (typeof r.salesUserName==='string'? r.salesUserName.trim(): '')
+            const validName = name && name!=='dd' && !/@/.test(name) ? name : undefined
+            return { ...r, salesUserName: validName }
+          }))
         } else {
           setError(json.error || 'Failed to load')
         }
@@ -500,7 +583,11 @@ function SalesPayroll() {
       const json = await res.json().catch(()=>({ ok:false }))
       if (json.ok) {
         const all = Array.isArray(json.items)? json.items: []
-  setItems(all.map((r:any)=> ({ ...r, salesUserName: (r.salesUserName && r.salesUserName !== 'dd') ? r.salesUserName : undefined })))
+        setItems(all.map((r:any)=> {
+          const name = (typeof r.salesUserName==='string'? r.salesUserName.trim(): '')
+          const validName = name && name!=='dd' && !/@/.test(name) ? name : undefined
+          return { ...r, salesUserName: validName }
+        }))
       } else setError(json.error||'Failed to load')
     } catch(e:any){ setError(String(e?.message||e)) } finally { setRefreshing(false) }
   }
@@ -526,9 +613,9 @@ function SalesPayroll() {
 
   // History grouping by salesUserId
   const paidItems = items.filter(i=> i.paid)
-  const salesNames = Array.from(new Set(paidItems.map(i=> (i.salesUserName && i.salesUserName!=='dd')? i.salesUserName : (i.salesUserId || '')))).filter(Boolean)
+  const salesNames = Array.from(new Set(paidItems.map(i=> (i.salesUserName && i.salesUserName!=='dd' && !/@/.test(i.salesUserName))? i.salesUserName.trim() : ''))).filter(Boolean)
   const historyMatrix = salesNames.map(name => {
-  const rows = paidItems.filter(i=> ((i.salesUserName && i.salesUserName!=='dd')? i.salesUserName : (i.salesUserId || '')) === name)
+  const rows = paidItems.filter(i=> ((i.salesUserName && i.salesUserName!=='dd' && !/@/.test(i.salesUserName))? i.salesUserName.trim() : '') === name)
     const total = rows.reduce((s,r)=> s + (Number(r.amount)||0),0)
     return { name, rows, total }
   })
@@ -537,13 +624,21 @@ function SalesPayroll() {
     setEditing(true)
     const extras = Array.isArray(it.extras)? it.extras: []
     const extrasTotal = extras.reduce((s:number,x:any)=> s + (Number(x.price)||0),0)
+    // Derive contract price if missing (mirror detail view logic)
+    const storedContract = Number(it.contractPrice)
+    const contractDerivedFromGrand = Number.isFinite(Number(it.grandTotal)) ? Number(it.grandTotal) - extrasTotal : NaN
+    const invertCommission = (Number(it.amount) && Number(it.commissionPercent)) ? (Number(it.amount) / (Number(it.commissionPercent)/100)) - extrasTotal : NaN
+    const resolvedContract = Number.isFinite(storedContract) && storedContract>0 ? storedContract : (Number.isFinite(contractDerivedFromGrand) && contractDerivedFromGrand>0 ? contractDerivedFromGrand : (Number.isFinite(invertCommission) && invertCommission>0 ? invertCommission : 0))
+    const commissionPercent = Number(it.commissionPercent)||0
+    const grandTotalBase = (Number(it.grandTotal)||0) || (resolvedContract + extrasTotal)
+    const amountBase = (Number(it.amount)||0) || (grandTotalBase * (commissionPercent/100))
     setEditData({
       id: it.id,
-      commissionPercent: it.commissionPercent ?? 0,
-      contractPrice: it.contractPrice ?? 0,
+      commissionPercent,
+      contractPrice: resolvedContract,
       extras: extras.map((x:any)=> ({ title: x.title || '', price: Number(x.price)||0 })),
-      grandTotal: it.grandTotal ?? ((Number(it.contractPrice)||0) + extrasTotal),
-      amount: it.amount ?? ( ( (Number(it.contractPrice)||0) + extrasTotal) * (Number(it.commissionPercent)||0) / 100 ),
+      grandTotal: grandTotalBase,
+      amount: amountBase,
       customerName: it.customerName || '',
       address: it.address || ''
     })

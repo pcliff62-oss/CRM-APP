@@ -5,10 +5,11 @@ import { getCurrentUser } from "@/lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET /api/customers?assignedTo=
+// GET /api/customers?assignedTo=&q=
 export async function GET(req: NextRequest) {
 	const { searchParams } = new URL(req.url);
 	const assignedTo = (searchParams.get('assignedTo') || '').trim();
+	const q = (searchParams.get('q') || '').trim().toLowerCase();
 	const current = await getCurrentUser(req).catch(()=>null as any);
 	const currentEmail = (current?.email || '').toLowerCase();
 	const contacts = await prisma.contact.findMany({
@@ -48,6 +49,10 @@ export async function GET(req: NextRequest) {
 			const at = String(it.assignedTo || '').toLowerCase();
 			return at === needle || (currentEmail && at === currentEmail) || at === '';
 		});
+	}
+	if (q) {
+		items = items.filter(it => it.name.toLowerCase().includes(q) || it.email.toLowerCase().includes(q));
+		items = items.slice(0, 15); // limit results
 	}
 	return NextResponse.json({ ok: true, items });
 }

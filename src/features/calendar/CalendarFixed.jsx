@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { listTasks } from "../../lib/tasks.ts";
+import AppointmentCard from './AppointmentCard.jsx'
 
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function isSameDay(a, b) { return startOfDay(a).getTime() === startOfDay(b).getTime(); }
@@ -68,21 +68,33 @@ export default function CalendarFixed({
   const [marks, setMarks] = useState({}); // { [YYYY-MM-DD]: count }
   const [dayOpen, setDayOpen] = useState(false);
   const [dayItems, setDayItems] = useState([]);
+  const [activeApptId, setActiveApptId] = useState(null)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const grid = useMemo(() => getMonthDaysGrid(viewMonth), [viewMonth]);
 
-  // Load tasks for visible grid range and build marks
+  // Load appointments for visible grid range and build marks
   useEffect(() => {
     let active = true
     ;(async () => {
       if (!grid.length) return
       const start = toLocalISODate(grid[0])
       const end = toLocalISODate(grid[grid.length - 1])
-      const all = await listTasks()
-      const ranged = all
-        .filter(t => typeof t.dueDate === 'string')
-        .filter(t => t.dueDate >= start && t.dueDate <= end)
-        .map(t => ({ id: t.id, title: t.title, date: t.dueDate }))
+      // Read from Next.js API via vite proxy
+      let ranged = []
+      try {
+        const res = await fetch('/next-api/api/appointments')
+        const data = await res.json().catch(()=>({}))
+        const items = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
+        ranged = items.map(a => {
+          const d = a.when ? new Date(a.when) : (a.start ? new Date(a.start) : null)
+          const date = d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` : ''
+          const title = a.title || a.workType || 'Appointment'
+          return { id: a.id, title, date }
+        }).filter(it => it.date && it.date >= start && it.date <= end)
+      } catch (e) {
+        console.error('[calendar] load appointments failed', e)
+      }
       const m = {}
       for (const it of ranged) m[it.date] = (m[it.date] ?? 0) + 1
       if (!active) return
@@ -90,7 +102,7 @@ export default function CalendarFixed({
       setMarks(m)
     })()
     return () => { active = false }
-  }, [viewMonth, grid])
+  }, [viewMonth, grid, refreshKey])
 
   function openDayList(d) {
     const key = toLocalISODate(d)
@@ -221,7 +233,11 @@ export default function CalendarFixed({
           ) : (
             <ul className="mt-1 space-y-1">
               {dayItems.map(it => (
-                <li key={it.id} className="text-sm">• {it.title}</li>
+                <li key={it.id} className="text-sm">
+                  <button type="button" className="underline hover:no-underline" onClick={()=> setActiveApptId(it.id)}>
+                    • {it.title}
+                  </button>
+                </li>
               ))}
             </ul>
           )}
@@ -229,6 +245,22 @@ export default function CalendarFixed({
             <button type="button" className="text-xs underline" onClick={() => setDayOpen(false)}>Close</button>
           </div>
         </div>
+      )}
+      {/* Appointment modal */}
+      {activeApptId && (
+        <AppointmentCard
+          id={activeApptId}
+          onClose={()=> setActiveApptId(null)}
+          onSaved={()=> {
+            // refresh list silently
+            setActiveApptId(null)
+            setRefreshKey(k => k+1)
+          }}
+          onDeleted={()=> {
+            setActiveApptId(null)
+            setRefreshKey(k => k+1)
+          }}
+        />
       )}
     </div>
   );

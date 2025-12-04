@@ -1,6 +1,12 @@
 import prisma from "@/lib/db";
+import { sendEmail } from '@/lib/email';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
+import dynamic from "next/dynamic";
+
+const WeatherWidget = dynamic(() => import('@/features/weather/WeatherWidget.jsx'), { ssr: false });
+const TasksClient = dynamic(() => import('./dashboard/TasksClient'), { ssr: false });
+const WeatherShiftTask = dynamic(() => import('./dashboard/WeatherShiftTask.jsx'), { ssr: false });
 
 function escapeRegExp(s: string) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
@@ -11,7 +17,7 @@ export default async function Page() {
   const now = new Date();
   const in7 = new Date(now); in7.setDate(now.getDate() + 7);
 
-  const [stageGroups, approvedSum, completedSum, invoicedSum, archivedYtdSum, appts, approvedLeads, tasksData] = await Promise.all([
+  const [stageGroups, approvedSum, completedSum, invoicedSum, archivedYtdSum, appts, approvedLeads, tasksData, usersForDocs] = await Promise.all([
     prisma.lead.groupBy({ by: ['stage'], _count: { stage: true } }).catch(() => []),
     prisma.lead.aggregate({ where: { stage: 'APPROVED', contractPrice: { not: null } }, _sum: { contractPrice: true } }),
     prisma.lead.aggregate({ where: { stage: 'COMPLETED', contractPrice: { not: null } }, _sum: { contractPrice: true } }),
@@ -21,7 +27,8 @@ export default async function Page() {
   // Fetch all jobs via API so we reuse unified classification logic (jobOnly=1)
   // Fetch approved leads (pipeline Approved) for Upcoming Jobs section
   prisma.lead.findMany({ where: { stage: 'APPROVED' }, include: { contact: true, property: true }, orderBy: { updatedAt: 'desc' } }),
-    fetch(`${API_BASE}/api/tasks`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []).catch(() => [])
+    fetch(`${API_BASE}/api/tasks`, { cache: 'no-store' }).then(r => r.ok ? r.json() : []).catch(() => []),
+  prisma.user.findMany({ select: { id: true, name: true, email: true, docsJson: true } })
   ]);
 
   const STAGES: Array<{ key: string; label: string; color: string }> = [
@@ -44,7 +51,43 @@ export default async function Page() {
   };
 
   const rawTasks: any[] = Array.isArray((tasksData as any)?.items) ? (tasksData as any).items : (Array.isArray(tasksData) ? (tasksData as any[]) : []);
-  const tasks = rawTasks.map(t => ({ id: String(t?.id || ''), title: String(t?.title || ''), dueDate: typeof t?.dueDate === 'string' ? t.dueDate : undefined, status: String(t?.status || '').toLowerCase() }));
+  const tasksBase = rawTasks.map(t => ({ id: String(t?.id || ''), title: String(t?.title || ''), dueDate: typeof t?.dueDate === 'string' ? t.dueDate : undefined, status: String(t?.status || '').toLowerCase() }));
+  // Add document tasks: expiring soon (<=14 days) and expired. Use mm/dd/yyyy formatting.
+  const fmtDate = (iso: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return new Date(iso).toLocaleDateString('en-US');
+    const [y,m,d] = iso.split('-');
+    return `${m}/${d}/${y}`;
+  };
+  const docTasks: any[] = [];
+  for (const u of usersForDocs as Array<{ id: string; name: string; email: string; docsJson: string|null }>) {
+    if (!u.docsJson) continue;
+    let docs: any[] = []; try { docs = JSON.parse(u.docsJson); } catch { continue; }
+    let mutated = false;
+    for (const d of docs) {
+      if (!d?.expires) continue;
+      const exp = new Date(d.expires + 'T00:00:00');
+      const diffDays = Math.ceil((exp.getTime() - now.getTime())/86400000);
+      const pretty = fmtDate(d.expires);
+      if (diffDays < 0) {
+        // Expired task
+        docTasks.push({ id: `doc-expired-${u.id}-${d.type}`, title: `${u.name} ${d.type.replace('_',' ')} has expired on: ${pretty}`, dueDate: d.expires });
+      } else if (diffDays <= 14) {
+        docTasks.push({ id: `doc-expiring-${u.id}-${d.type}`, title: `${u.name} ${d.type.replace('_',' ')} is expiring on ${pretty}`, dueDate: d.expires });
+        if (!d.notifiedExpiringAt && u.email) {
+          const subject = `Document Expiring Soon: ${d.type.replace('_',' ')}`;
+          const body = `Hello ${u.name},\n\nYour document '${d.type.replace('_',' ')}' is expiring on ${pretty}. Please update it.\n\nThanks.`;
+          await sendEmail(u.email, subject, body);
+          d.notifiedExpiringAt = new Date().toISOString();
+          mutated = true;
+        }
+      }
+    }
+    // Persist notification flags if modified
+    if (mutated) {
+      try { await prisma.user.update({ where:{ id: u.id }, data: { docsJson: JSON.stringify(docs) } }); } catch {}
+    }
+  }
+  const tasks = [...docTasks, ...tasksBase];
 
   const isJob = (a: any) => !!a.allDay || /^JOB:\s*/i.test(String(a.title||'')) || !!a.crewId || (typeof a.squares === 'number' && isFinite(a.squares) && a.squares > 0);
   const upcomingAppointments = (appts as any[]).filter(a => !isJob(a));
@@ -143,14 +186,28 @@ export default async function Page() {
                 const name: string = l.contact?.name || l.title || 'Lead';
                 const price: number | null = typeof l.contractPrice === 'number' && !isNaN(l.contractPrice) ? l.contractPrice : null;
                 const addr: string = l.property?.address1 || '';
-                return (
-                  <li key={l.id} className="py-2 flex items-start gap-3">
+                const contactId: string | null = l.contact?.id || null;
+                const inner = (
+                  <>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm text-slate-800 truncate">{name}</div>
                       {price != null && <div className="text-xs font-semibold text-emerald-600">${price.toLocaleString()}</div>}
                       {addr && <div className="text-xs text-slate-500 truncate">{addr}</div>}
                     </div>
                     <span className="ml-auto inline-flex items-center justify-center min-w-8 h-7 px-2 rounded-full bg-emerald-500 text-white text-xs font-semibold">Approved</span>
+                  </>
+                );
+                return (
+                  <li key={l.id} className="py-2">
+                    {contactId ? (
+                      <Link href={`/customers/${contactId}`} className="flex items-start gap-3 hover:bg-slate-50 rounded-md px-2 py-2 transition" aria-label={`Open contact card for ${name}`}>
+                        {inner}
+                      </Link>
+                    ) : (
+                      <div className="flex items-start gap-3">
+                        {inner}
+                      </div>
+                    )}
                   </li>
                 );
               })}
@@ -159,27 +216,27 @@ export default async function Page() {
         </CardContent>
       </Card>
 
-      {/* Tasks (moved to right) */}
+    {/* Tasks (moved to right) */}
       <Card>
         <CardHeader className="bg-gradient-to-r from-slate-900 via-blue-900 to-blue-700 text-white rounded-t-xl">
           <CardTitle className="text-white">Tasks</CardTitle>
         </CardHeader>
         <CardContent>
-          {tasks.length === 0 ? (
-            <div className="text-slate-500 text-sm">No tasks yet.</div>
-          ) : (
-            <ul className="divide-y">
-              {tasks.slice(0,6).map(t => (
-                <li key={t.id} className="py-2 flex items-start gap-3">
-                  <div className="mt-1 h-2 w-2 rounded-full bg-amber-500" />
-                  <div className="min-w-0">
-                    <div className="text-sm text-slate-800 truncate">{t.title || 'Untitled task'}</div>
-                    {t.dueDate ? <div className="text-xs text-slate-500">Due {new Date(t.dueDate).toLocaleDateString()}</div> : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+      <div className="flex flex-col gap-3">
+        <WeatherShiftTask />
+        <TasksClient tasks={tasks} />
+      </div>
+        </CardContent>
+      </Card>
+
+      {/* Weather Forecast (moved to bottom) */}
+      <Card className="md:col-span-2">
+        <CardHeader className="bg-gradient-to-r from-slate-900 via-blue-900 to-blue-700 text-white rounded-t-xl">
+          <CardTitle className="text-white">Weather Forecast</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {/* Client-only widget renders here and can trigger job shifting */}
+          <WeatherWidget />
         </CardContent>
       </Card>
     </div>

@@ -23,6 +23,7 @@ export default function NewLeadButton() {
   const [users, setUsers] = useState<Array<{ id: string; name: string; role?: string }>>([]);
   const [form, setForm] = useState<FormState>({ name: "", email: "", phone: "", address: "", notes: "", category: "", date: today(), time: nextHalfHour() });
   const addrRef = useRef<HTMLInputElement | null>(null);
+  const [conflicts, setConflicts] = useState<Record<string,{ city: string }>>({});
 
   // Load users and Google Places
   useEffect(() => {
@@ -64,6 +65,50 @@ export default function NewLeadButton() {
       });
     });
   }, [open]);
+
+  useEffect(() => {
+    if (!form.date) { setConflicts({}); return; }
+    if (!form.userId) { setConflicts({}); return; }
+    (async () => {
+      try {
+        // Fetch all appointments for tenant; then filter by date and user
+        const res = await fetch(`/api/appointments`);
+        if (!res.ok) { setConflicts({}); return; }
+        const data = await res.json().catch(()=>({ items: [] }));
+        const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+        const map: Record<string,{ city: string }> = {};
+        for (const appt of items) {
+          const startStr: string | undefined = appt.when || appt.start || appt.startTime;
+          const endStr: string | undefined = appt.end;
+          if (!startStr) continue;
+          const startDateObj = new Date(startStr);
+          // Use local date components to avoid UTC slicing problems
+          const datePartStart = `${startDateObj.getFullYear()}-${String(startDateObj.getMonth()+1).padStart(2,'0')}-${String(startDateObj.getDate()).padStart(2,'0')}`;
+          if (datePartStart !== form.date) continue;
+          const matchesUser = appt.userId === form.userId || appt.user?.id === form.userId || (Array.isArray(appt.assignees) && appt.assignees.some((x:any)=>x.id===form.userId));
+          const nameMatch = (!matchesUser && appt.userName && users.find(u=>u.id===form.userId && u.name===appt.userName));
+          if (!matchesUser && !nameMatch) continue;
+          // derive start local HH:MM
+          let h = startDateObj.getHours();
+          let m = startDateObj.getMinutes();
+          let durationMins = 60;
+          if (endStr) {
+            const endDateObj = new Date(endStr);
+            const diff = endDateObj.getTime() - startDateObj.getTime();
+            if (diff > 0) durationMins = Math.min(diff/60000, 8*60);
+          }
+          const steps = Math.ceil(durationMins/30);
+          for (let i=0;i<steps;i++) {
+            const inc = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+            map[inc] = { city: appt.city || appt.address?.split(',')[1]?.trim() || '' };
+            m += 30; if (m>=60){ m=0; h+=1; }
+          }
+        }
+        setConflicts(map);
+        setForm(f => f.time && f.time in map ? { ...f, time: '' } : f);
+      } catch { setConflicts({}); }
+    })();
+  }, [form.userId, form.date, users]);
 
   const times = useMemo(() => halfHourIncrements("07:00", "17:00"), []);
 
@@ -124,6 +169,13 @@ export default function NewLeadButton() {
                 <Input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
               </div>
               <div>
+                <label className="text-xs text-slate-500">Assign to</label>
+                <Select value={form.userId ?? ""} onChange={(v) => setForm({ ...form, userId: v || undefined })}>
+                  <option value="">Me</option>
+                  {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </Select>
+              </div>
+              <div>
                 <label className="text-xs text-slate-500">Category</label>
                 <Select value={form.category} onChange={v => setForm({ ...form, category: v as any })}>
                   <option value="">Select…</option>
@@ -143,17 +195,17 @@ export default function NewLeadButton() {
                 <label className="text-xs text-slate-500">Date</label>
                 <Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
               </div>
-              <div>
+              <div className="col-span-2">
                 <label className="text-xs text-slate-500">Time</label>
                 <Select value={form.time} onChange={v => setForm({ ...form, time: v })}>
-                  {times.map(t => <option key={t} value={t}>{t}</option>)}
-                </Select>
-              </div>
-              <div className="col-span-2">
-                <label className="text-xs text-slate-500">Assign to</label>
-                <Select value={form.userId ?? ""} onChange={(v) => setForm({ ...form, userId: v || undefined })}>
-                  <option value="">Me</option>
-                  {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  {times.map(t => {
+                    const [h,m] = t.split(":").map(Number);
+                    const suffix = h >= 12 ? "PM" : "AM";
+                    const hour12 = ((h + 11) % 12) + 1;
+                    const label = `${hour12}:${m.toString().padStart(2,'0')} ${suffix}`;
+                    const conflict = conflicts[t];
+                    return <option key={t} value={conflict ? '' : t} disabled={!!conflict} title={conflict ? (conflict.city ? `Booked (${conflict.city})` : 'Booked') : ''} style={conflict ? { textDecoration: 'line-through', color:'#6b7280' } : undefined}>{label}</option>;
+                  })}
                 </Select>
               </div>
               <div className="col-span-2">

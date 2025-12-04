@@ -13,8 +13,6 @@ export async function GET() {
     id: r.id,
     name: r.name || r.email,
     commissionPercent: r.commissionPercent ?? null,
-    basePayAmount: r.basePayAmount ?? null,
-    basePayPeriod: r.basePayPeriod ?? null,
     members: [{ id: r.id, name: r.name || r.email }],
     docs: [] as any[],
     source: 'user' as const

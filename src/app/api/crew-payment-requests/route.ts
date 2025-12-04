@@ -23,16 +23,23 @@ export async function GET(req: NextRequest) {
       if (r.crewUserId) {
         try { const u = await prisma.user.findFirst({ where: { id: r.crewUserId } }); crewName = u?.name || null } catch {}
       }
-      // Parse extras & attachments from pastJob
+      // Parse extras: prefer request's current extrasJson over pastJob snapshot so edits persist
       let extras: Array<{ title: string; price: number }> = []
       try {
-  const arr = JSON.parse((pastJob?.extrasJson || r.extrasJson) || '[]')
+        const rawExtrasSource = (r.extrasJson && r.extrasJson.trim().length>0) ? r.extrasJson : (pastJob?.extrasJson || '[]')
+        const arr = JSON.parse(rawExtrasSource || '[]')
         if (Array.isArray(arr)) extras = arr.map((x: any) => ({ title: String(x?.title||'').trim(), price: Number(x?.price)||0 }))
       } catch {}
       let attachments: Array<{ id: string; name: string; url: string }> = []
       try {
   const arr = JSON.parse((pastJob?.attachmentsJson || r.attachmentsJson) || '[]')
         if (Array.isArray(arr)) attachments = arr.map((x: any, i: number) => ({ id: String(x?.id||`att-${i}`), name: String(x?.name||'file'), url: String(x?.url||x?.path||'') }))
+      } catch {}
+      // Adjustments (from field app)
+      let adjustments: any = null
+      try {
+        const a = JSON.parse((pastJob?.adjustmentsJson || r.adjustmentsJson) || 'null')
+        if (a && typeof a === 'object') adjustments = a
       } catch {}
       // Prefer editable CrewPaymentRequest fields over pastJob snapshot so user adjustments persist
       const usedSquares = (() => {
@@ -42,9 +49,10 @@ export async function GET(req: NextRequest) {
       })()
       const rate = Number.isFinite(Number(r.ratePerSquare)) ? Number(r.ratePerSquare) : (Number.isFinite(Number(pastJob?.ratePerSquare)) ? Number(pastJob.ratePerSquare) : 0)
       const installTotal = Number.isFinite(Number(r.installTotal)) ? Number(r.installTotal) : (Number.isFinite(Number(pastJob?.installTotal)) ? Number(pastJob.installTotal) : usedSquares * rate)
-      const extrasTotal = Number.isFinite(Number(r.extrasTotal)) ? Number(r.extrasTotal) : (Number.isFinite(Number(pastJob?.extrasTotal)) ? Number(pastJob.extrasTotal) : extras.reduce((s,x)=>s+(Number(x.price)||0),0))
+  // Derive extrasTotal: prefer stored request value; else recompute from its extras array; fall back to pastJob
+  const extrasTotal = Number.isFinite(Number(r.extrasTotal)) ? Number(r.extrasTotal) : extras.reduce((s,x)=>s+(Number(x.price)||0),0) || (Number.isFinite(Number(pastJob?.extrasTotal)) ? Number(pastJob.extrasTotal) : 0)
       const grandTotal = Number.isFinite(Number(r.grandTotal)) ? Number(r.grandTotal) : (Number.isFinite(Number(pastJob?.grandTotal)) ? Number(pastJob.grandTotal) : installTotal + extrasTotal)
-      items.push({
+  items.push({
         id: r.id,
         createdAt: r.createdAt,
         appointmentId: r.appointmentId,
@@ -52,8 +60,7 @@ export async function GET(req: NextRequest) {
         crewUserId: r.crewUserId,
         crewName,
   // salesPersonName removed; sales requests now separate model
-        amount: r.amount ?? grandTotal,
-        rateTier: r.rateTier || pastJob?.rateTier || null,
+  amount: r.amount ?? grandTotal,
         customerName: pastJob?.customerName || r.customerName || 'Job',
         address: pastJob?.address || r.address || '',
         usedSquares,
@@ -62,7 +69,8 @@ export async function GET(req: NextRequest) {
         extrasTotal,
         grandTotal,
         extras,
-        attachments,
+  attachments,
+  adjustments,
         paid: !!r.paid,
         paidAt: r.paidAt || null,
       })
@@ -74,12 +82,12 @@ export async function GET(req: NextRequest) {
 }
 
 // POST /api/crew-payment-requests
-// body: { appointmentId?, pastJobId?, crewUserId?, amount?, rateTier?, customerName?, address?, usedSquares?, ratePerSquare?, installTotal?, extrasTotal?, grandTotal?, extrasJson?, attachmentsJson? }
+// body: { appointmentId?, pastJobId?, crewUserId?, amount?, customerName?, address?, usedSquares?, ratePerSquare?, installTotal?, extrasTotal?, grandTotal?, extrasJson?, adjustmentsJson?, attachmentsJson? }
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const data: any = {}
-  const scalarFields = ['appointmentId','pastJobId','crewUserId','rateTier','customerName','address','extrasJson','attachmentsJson']
+  const scalarFields = ['appointmentId','pastJobId','crewUserId','customerName','address','extrasJson','adjustmentsJson','attachmentsJson']
     for (const k of scalarFields) if (k in body) data[k] = body[k]
     if ('amount' in body) { const n = Number(body.amount); if (Number.isFinite(n)) data.amount = n }
   if ('usedSquares' in body) { const n = Number(body.usedSquares); if (Number.isFinite(n)) data.usedSquares = n }
@@ -122,9 +130,9 @@ export async function PATCH(req: NextRequest) {
     // Adjust totals for single request
     if (body.id && body.updates && typeof body.updates === 'object') {
       const data: any = {}
-      const numeric = ['amount','usedSquares','ratePerSquare','installTotal','extrasTotal','grandTotal']
+    const numeric = ['amount','usedSquares','ratePerSquare','installTotal','extrasTotal','grandTotal']
       for (const k of numeric) if (k in body.updates) { const n = Number(body.updates[k]); if (Number.isFinite(n)) data[k] = n }
-      const scalars = ['rateTier','customerName','address','extrasJson','attachmentsJson']
+  const scalars = ['customerName','address','extrasJson','adjustmentsJson','attachmentsJson']
       for (const k of scalars) if (k in body.updates) data[k] = body.updates[k]
 
       // Derive installTotal if not explicitly provided but usedSquares & ratePerSquare changed

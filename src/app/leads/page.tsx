@@ -1,5 +1,5 @@
 import prisma from "@/lib/db";
-import { pricingBreakdownForLead } from '@/lib/jobs';
+import { pricingBreakdownForLead, scheduleJobForLead } from '@/lib/jobs';
 export const dynamic = "force-dynamic"; // force dynamic rendering
 export const revalidate = 0; // disable ISR caching
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,106 @@ import LeadsDragDropClient from "./LeadsDragDropClient";
 
 async function moveLead(id: string, stage: string) {
   "use server";
-  await prisma.lead.update({ where: { id }, data: { stage: stage as any } });
+  const updated = await prisma.lead.update({ where: { id }, data: { stage: stage as any }, include: { contact: true, assignee: true } });
+  // On APPROVED: ensure job exists
+  if (stage === 'APPROVED') {
+    try {
+      const res = await scheduleJobForLead(updated.id);
+      if (res?.apptId && updated.assigneeId) {
+        await prisma.appointment.update({ where: { id: res.apptId }, data: { userId: updated.assigneeId } }).catch(()=>null)
+      }
+    } catch {}
+  }
+  // On COMPLETED: create a customer invoice (Pending)
+  if (stage === 'COMPLETED') {
+    try {
+      const pb = await pricingBreakdownForLead(updated.id)
+      const contractPrice = pb.contractPrice ?? 0
+      const extrasTotal = pb.extrasTotal || 0
+      // Determine depositAmount from contact.depositReceived or paid DEPOSIT invoices
+      let depositAmount = 0
+      if (updated.contactId) {
+        const c = await prisma.contact.findUnique({ where: { id: updated.contactId }, select: { depositReceived: true } })
+        if (c && typeof c.depositReceived === 'number' && isFinite(c.depositReceived)) depositAmount = c.depositReceived
+      }
+      if (depositAmount === 0) {
+        const paidDeposits = await prisma.invoice.findMany({ where: { leadId: updated.id, type: 'DEPOSIT', paidAt: { not: null } }, select: { paidAmount: true } })
+        depositAmount = paidDeposits.reduce((s,i)=> s + (Number(i.paidAmount||0)||0), 0)
+      }
+      const totalDue = contractPrice - depositAmount + extrasTotal
+      // Build address description
+      const leadWithProp = await prisma.lead.findUnique({ where: { id: updated.id }, include: { property: true } })
+      const p = leadWithProp?.property as any
+      const addr = p ? [p.address1, p.city, [p.state, p.postal].filter(Boolean).join(' ')].filter(Boolean).join(', ') : ''
+      // Build line items
+      const items: any[] = []
+      items.push({ title: 'Contract', description: addr ? `complete contracted work at ${addr}` : 'complete contracted work', qty: 1, rate: contractPrice, amount: contractPrice })
+      if (depositAmount>0) {
+        const depositDesc = `deposit received ${new Date().toLocaleDateString()}`
+        items.push({ title: 'Deposit', description: depositDesc, qty: 1, rate: -depositAmount, amount: -depositAmount })
+      }
+      for (const ex of (pb.extras || [])) {
+        const desc = (ex as any).description || (ex as any).title || 'Extra'
+        const amt = Number((ex as any).amount ?? (ex as any).price ?? 0) || 0
+        items.push({ title: 'Extra', description: String(desc), qty: 1, rate: amt, amount: amt })
+      }
+      const appt = await prisma.appointment.findFirst({ where: { leadId: updated.id, allDay: true }, orderBy: { start: 'desc' }, select: { id: true } })
+      // Generate unique number YYYYMM-####
+      const y = new Date()
+      const prefix = `${y.getFullYear()}${String(y.getMonth()+1).padStart(2,'0')}`
+      let seq = 0
+      try {
+        const last = await prisma.invoice.findFirst({ where: { tenantId: updated.tenantId, number: { startsWith: `${prefix}-` } }, orderBy: { number: 'desc' }, select: { number: true } })
+        if (last?.number) { const m = last.number.match(/-(\d{4})$/); if (m) seq = parseInt(m[1],10) }
+      } catch {}
+      let number = `${prefix}-${String(seq + 1).padStart(4,'0')}`
+      let created: any = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          created = await prisma.invoice.create({
+            data: {
+              tenantId: updated.tenantId,
+              leadId: updated.id,
+              contactId: updated.contactId || undefined,
+              appointmentId: appt?.id || undefined,
+              number,
+              status: 'PENDING',
+              contractPrice,
+              depositAmount,
+              extrasJson: items.length ? JSON.stringify(items) : undefined,
+              extrasTotal,
+              totalDue,
+              dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+            }
+          })
+          break
+        } catch (e:any) {
+          if (String(e?.message||'').includes('Unique') || String(e?.message||'').includes('unique')) { seq += 1; number = `${prefix}-${String(seq + 1).padStart(4,'0')}`; continue }
+          throw e
+        }
+      }
+      if (!created?.id) {
+        // Fallback: draft without number
+        created = await prisma.invoice.create({
+          data: {
+            tenantId: updated.tenantId,
+            leadId: updated.id,
+            contactId: updated.contactId || undefined,
+            appointmentId: appt?.id || undefined,
+            status: 'PENDING',
+            contractPrice,
+            depositAmount,
+            extrasJson: items.length ? JSON.stringify(items) : undefined,
+            extrasTotal,
+            totalDue,
+            dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+          }
+        })
+      }
+      // Refresh invoices page
+      revalidatePath('/invoices')
+    } catch {}
+  }
   revalidatePath("/leads");
 }
 

@@ -3,23 +3,27 @@ import { fetchCustomer, submitJob } from '../../lib/api.js'
 
 // Lightweight crew-facing job detail card
 // Props: job (appointment with job flag), onBack, onUpdated(job), onComplete(job)
-export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
+export default function CrewJobDetail({ job, userRate, onBack, onUpdated, onComplete }) {
+  // Round to nearest 0.5, e.g., 13.40 -> 13.50, 13.74 -> 13.50, 13.76 -> 14.00
+  const roundToHalf = (v) => {
+    const n = Number(v)
+    if (!Number.isFinite(n)) return 0
+    return Math.round(n * 2) / 2
+  }
   const [customer, setCustomer] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [usedSquares, setUsedSquares] = useState(() => {
     const val = job?.squaresUsed ?? job?.squares
     if (val == null || val === '') return ''
-    const n = Number(val)
-    return Number.isFinite(n) ? n.toFixed(1) : ''
+    const n = roundToHalf(val)
+    return Number.isFinite(n) ? n.toFixed(2) : ''
   })
-  // Rate tier selection (pricing per square). Default easy.
-  const RATE_TIERS = [
-    { id: 'easy', label: 'Easy', rate: 130 },
-    { id: 'medium', label: 'Medium', rate: 140 },
-    { id: 'difficult', label: 'Difficult', rate: 150 },
-  ]
-  const [rateTier, setRateTier] = useState('easy')
+  // Read-only rate per square from CRM user settings
+  const ratePerSquare = useMemo(() => {
+    const n = Number(userRate)
+    return Number.isFinite(n) && n > 0 ? n : 0
+  }, [userRate])
   // Extras rows: { id, desc, price }
   const [extrasRows, setExtrasRows] = useState(() => {
     try {
@@ -39,8 +43,14 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
     return [{ id: 'extra-0', desc: '', price: '' }]
   })
   const [attachments, setAttachments] = useState([])
-  const [saving, setSaving] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const adjustmentPerSq = 10 // $10 per square per adjustment
+
+  // New adjustment state (applied vs draft)
+  const [adjustPanelOpen, setAdjustPanelOpen] = useState(false)
+  const [appliedAdjustments, setAppliedAdjustments] = useState({ doubleLayerRip: false, steepSlope: false, difficult: false })
+  const [draftAdjustments, setDraftAdjustments] = useState(appliedAdjustments)
+  const appliedAdjustmentCount = useMemo(() => Object.values(appliedAdjustments).filter(Boolean).length, [appliedAdjustments])
 
   useEffect(() => {
     let active = true
@@ -98,15 +108,6 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
     })
   }
 
-  async function saveAdjustments() {
-    try {
-      setSaving(true)
-      const used = usedSquares !== '' ? Number(usedSquares) : undefined
-      // Only adjust used squares here; total job squares remains read-only
-      const updated = { ...job, squaresUsed: used ?? job.squaresUsed }
-      onUpdated?.(updated)
-    } finally { setSaving(false) }
-  }
 
   async function markComplete() {
     // Confirm before submitting completion
@@ -116,28 +117,31 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
     }
     try {
       setSubmitting(true)
-      const squares = usedSquares !== '' ? Number(usedSquares) : (job?.squares != null ? Number(job.squares) : undefined)
+      const squares = usedSquares !== ''
+        ? roundToHalf(usedSquares)
+        : (job?.squares != null ? roundToHalf(job.squares) : undefined)
       const extraItems = extrasRows
         .map((r,i)=>({ id: r.id || `extra-${i}`, title: String(r.desc||'').trim(), price: Number(r.price)||0, qty: 1 }))
         .filter(it => (it.title && it.title.length) || (it.price && it.price>0))
       const finalAttachments = attachments.map((f,i)=>({ id:`att-${i}`, name:f.name || `file-${i}`, url:f.url || f.preview || '' }))
       const submitted = await submitJob(job.id, { squares, extras: extraItems, attachments: finalAttachments })
-    try {
+      try {
         const extrasJson = JSON.stringify(extraItems)
+        const adjustmentsJson = JSON.stringify({ ...appliedAdjustments, adjustmentPerSq })
         const payload = {
           leadId: submitted.customerId || submitted.contactId || undefined,
           appointmentId: submitted.id,
           crewUserId: submitted.crewId || undefined,
           customerName: submitted.customerName || submitted.title || 'Job',
           address: submitted.address || '',
-      squares: Number.isFinite(Number(submitted.squares)) ? Number(submitted.squares) : undefined,
-      usedSquares: squares,
-      rateTier,
-      ratePerSquare: pricing?.tier?.rate || undefined,
-      installTotal: pricing?.installTotal || undefined,
-      extrasTotal: pricing?.extrasTotal || undefined,
-      grandTotal: pricing?.grand || undefined,
+          squares: Number.isFinite(Number(submitted.squares)) ? Number(submitted.squares) : undefined,
+          usedSquares: squares,
+          ratePerSquare: pricing?.rate || undefined,
+          installTotal: pricing?.installTotal || undefined,
+          extrasTotal: pricing?.extrasTotal || undefined,
+          grandTotal: pricing?.grand || undefined,
           extrasJson,
+          adjustmentsJson,
           completedAt: new Date().toISOString(),
         }
         // Fire and forget; Next API will persist centrally
@@ -148,31 +152,38 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
           const pjJson = await pjRes.json().catch(()=>({}))
           if (pjJson?.ok && pjJson?.item?.id) pastJobId = pjJson.item.id
         } catch {}
-        // Create crew payment request (fire and forget) with pastJobId
+        // Create crew payment request and ensure it's persisted (surface errors instead of swallowing)
         try {
           const paymentReq = {
             appointmentId: submitted.id,
             pastJobId,
             crewUserId: submitted.crewId || undefined,
             amount: pricing?.grand || undefined,
-            rateTier: rateTier,
             customerName: submitted.customerName || submitted.title || 'Job',
             address: submitted.address || '',
             usedSquares: pricing?.used,
-            ratePerSquare: pricing?.tier?.rate,
+            ratePerSquare: pricing?.rate,
             installTotal: pricing?.installTotal,
             extrasTotal: pricing?.extrasTotal,
             grandTotal: pricing?.grand,
             extrasJson: JSON.stringify(extraItems),
+            adjustmentsJson,
             attachmentsJson: JSON.stringify(finalAttachments)
           }
-          fetch('/api/crew-payment-requests', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(paymentReq) }).catch(()=>{})
-        } catch {}
-        // Move pipeline stage to COMPLETED when we have a lead id
-        const leadId = payload.leadId
-        if (leadId) {
-          fetch('/api/leads', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ id: leadId, stage: 'COMPLETED' }) }).catch(()=>{})
+          const cprRes = await fetch('/api/crew-payment-requests', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(paymentReq) })
+          const cprJson = await cprRes.json().catch(()=>({}))
+          if (!cprRes.ok || !cprJson?.ok) {
+            // Provide a visible hint so crews can report issues and admins can refresh Payroll
+            throw new Error(cprJson?.error || 'Failed to create payment request')
+          }
+        } catch (err) {
+          // Show an alert but don't stop marking job complete (PastJob and Appointment already saved)
+          try { console.error('crew-payment-request create failed', err) } catch {}
+          if (typeof window !== 'undefined') {
+            window.alert('Payment request may not have been created. You can retry from Payroll. Error: ' + (err?.message || String(err)))
+          }
         }
+  // Do not move pipeline stage here; only Sales/Admin/Manager should advance pipeline.
       } catch {}
       onComplete?.(submitted)
     } catch (e) {
@@ -188,7 +199,9 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
 
   // -------- Pricing / Totals Computation --------
   const pricing = useMemo(() => {
-    const tier = RATE_TIERS.find(t => t.id === rateTier) || RATE_TIERS[0]
+    const baseRate = ratePerSquare
+    const adjustmentAdder = appliedAdjustmentCount * adjustmentPerSq
+    const rate = baseRate + adjustmentAdder
     const used = (() => {
       if (usedSquares !== '') {
         const n = Number(usedSquares)
@@ -199,7 +212,7 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
       const n = Number(fallback)
       return Number.isFinite(n) ? n : 0
     })()
-    const installTotal = used * tier.rate
+    const installTotal = used * rate
     const newExtrasTotal = extrasRows.reduce((sum, r) => {
       const n = Number(r.price)
       if (!r.desc && (!Number.isFinite(n) || n === 0)) return sum
@@ -208,11 +221,19 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
     const existingExtrasTotal = extras.reduce((sum, x) => sum + (Number(x?.price) || 0), 0)
     const extrasTotal = newExtrasTotal + existingExtrasTotal
     const grand = installTotal + extrasTotal
-    return { tier, used, installTotal, extrasTotal, grand }
-  }, [rateTier, usedSquares, extrasRows, extras, job?.squaresUsed, job?.squares])
+    return { rate, used, installTotal, extrasTotal, grand, baseRate, adjustmentAdder }
+  }, [ratePerSquare, usedSquares, extrasRows, extras, job?.squaresUsed, job?.squares, appliedAdjustmentCount])
 
   function fmtMoney(n) {
     return (Number.isFinite(n) ? n : 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  }
+
+  function applyAdjustments() {
+    setAppliedAdjustments(draftAdjustments)
+    setAdjustPanelOpen(false)
+  }
+  function resetDraftToApplied() {
+    setDraftAdjustments(appliedAdjustments)
   }
 
   return (
@@ -283,36 +304,96 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
         <div className="font-medium">Squares</div>
         <div className="flex items-center justify-between">
           <div className="text-neutral-600">Total Squares</div>
-          <div className="font-semibold">{(Number(job?.squares)).toFixed ? Number(job.squares).toFixed(2) : (job?.squares ?? '—')}</div>
+          <div className="font-semibold">{(() => {
+            const n = roundToHalf(job?.squares)
+            return Number.isFinite(n) ? n.toFixed(2) : (job?.squares ?? '—')
+          })()}</div>
         </div>
-  <label className="block">Actual Sqaures Used
-          <input
-            type="number"
-            step="0.1"
-            value={usedSquares}
-            onChange={e=>setUsedSquares(e.target.value)}
-            onBlur={()=>{
-              if (usedSquares==='') return
-              const n = Number(usedSquares)
-              setUsedSquares(Number.isFinite(n) ? n.toFixed(1) : '')
-            }}
-            className="mt-1 w-full h-9 border rounded-md px-2" />
+        <label className="block">Actual Squares Used
+          <div className="mt-1 relative flex items-stretch">
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.5"
+              value={usedSquares}
+              onChange={e=> setUsedSquares(e.target.value)}
+              onBlur={() => {
+                if (usedSquares==='') return
+                const n = roundToHalf(usedSquares)
+                setUsedSquares(Number.isFinite(n) ? n.toFixed(2) : '')
+              }}
+              className="w-full h-9 border rounded-md pl-2 pr-16"
+            />
+            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const base = usedSquares !== '' ? Number(usedSquares) : (Number(job?.squaresUsed ?? job?.squares) || 0)
+                  const n = Math.max(0, roundToHalf(base - 0.5))
+                  setUsedSquares(n.toFixed(2))
+                }}
+                className="h-7 w-8 rounded border bg-white text-neutral-700 text-sm active:bg-neutral-50"
+                aria-label="Decrease by 0.5"
+              >−</button>
+              <button
+                type="button"
+                onClick={() => {
+                  const base = usedSquares !== '' ? Number(usedSquares) : (Number(job?.squaresUsed ?? job?.squares) || 0)
+                  const n = Math.max(0, roundToHalf(base + 0.5))
+                  setUsedSquares(n.toFixed(2))
+                }}
+                className="h-7 w-8 rounded border bg-white text-neutral-700 text-sm active:bg-neutral-50"
+                aria-label="Increase by 0.5"
+              >+</button>
+            </div>
+          </div>
         </label>
-        {/* Rate tier selection */}
-        <label className="block">Rate Tier
-          <select
-            value={rateTier}
-            onChange={e=>setRateTier(e.target.value)}
-            className="mt-1 w-full h-9 border rounded-md px-2 bg-white"
-          >
-            {RATE_TIERS.map(t => (
-              <option key={t.id} value={t.id}>{t.label} — ${t.rate}/sq</option>
-            ))}
-          </select>
-        </label>
-        <div className="flex justify-end">
-          <button disabled={saving} onClick={saveAdjustments} className="h-9 px-3 rounded-md border bg-white active:bg-neutral-50 disabled:opacity-50">{saving? 'Saving…':'Apply'}</button>
+        {/* Rate row with Adjust button */}
+        <div className="flex items-start justify-between">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-neutral-600">Rate</span>
+              {ratePerSquare > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setAdjustPanelOpen(o => !o); if (!adjustPanelOpen) resetDraftToApplied(); }}
+                  className="text-[11px] px-2 py-0.5 rounded border bg-white active:bg-neutral-50"
+                >{adjustPanelOpen ? 'Cancel' : 'Adjust rate'}</button>
+              )}
+            </div>
+            {appliedAdjustmentCount > 0 && !adjustPanelOpen && (
+              <div className="text-[11px] text-neutral-500">Base {fmtMoney(pricing.baseRate)} + {appliedAdjustmentCount} × {fmtMoney(adjustmentPerSq)} = {fmtMoney(pricing.rate)}</div>
+            )}
+          </div>
+          <div className="font-medium text-right min-w-[110px]">{pricing.baseRate>0 ? `${fmtMoney(pricing.rate)} / sq` : '—'}</div>
         </div>
+        {ratePerSquare===0 && (
+          <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+            No rate set for this user. Ask an admin to set “Rate per square” in user settings.
+          </div>
+        )}
+        {adjustPanelOpen && (
+          <div className="mt-3 space-y-2 border rounded-md p-3 bg-neutral-50">
+            <div className="text-xs font-medium mb-1">Rate Adjustments (+{fmtMoney(adjustmentPerSq)} / sq each)</div>
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={draftAdjustments.doubleLayerRip} onChange={e=> setDraftAdjustments(a=>({...a, doubleLayerRip: e.target.checked}))} />
+              <span>Double layer rip</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={draftAdjustments.steepSlope} onChange={e=> setDraftAdjustments(a=>({...a, steepSlope: e.target.checked}))} />
+              <span>Steep slope</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={draftAdjustments.difficult} onChange={e=> setDraftAdjustments(a=>({...a, difficult: e.target.checked}))} />
+              <span>Difficult</span>
+            </label>
+            <div className="text-[11px] text-neutral-600 mt-1">Preview: Base {fmtMoney(pricing.baseRate)} + {Object.values(draftAdjustments).filter(Boolean).length} × {fmtMoney(adjustmentPerSq)} = {fmtMoney(pricing.baseRate + Object.values(draftAdjustments).filter(Boolean).length * adjustmentPerSq)}</div>
+            <div className="flex gap-2 pt-2">
+              <button type="button" onClick={applyAdjustments} className="h-8 px-3 rounded-md bg-emerald-600 text-white text-xs active:scale-[0.97]">Apply</button>
+              <button type="button" onClick={() => { setDraftAdjustments({ doubleLayerRip:false, steepSlope:false, difficult:false }) }} className="h-8 px-3 rounded-md border bg-white text-xs active:bg-neutral-100">Clear</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Extras */}
@@ -379,8 +460,9 @@ export default function CrewJobDetail({ job, onBack, onUpdated, onComplete }) {
       {/* Totals */}
       <div className="rounded-2xl border border-neutral-200 bg-white p-4 space-y-2 text-sm">
         <div className="font-medium">Totals</div>
-        <div className="flex justify-between"><span className="text-neutral-600">Rate</span><span>{fmtMoney(pricing.tier.rate)} / sq ({pricing.tier.label})</span></div>
-        <div className="flex justify-between"><span className="text-neutral-600">Install ({pricing.used.toFixed(1)} sq × ${pricing.tier.rate})</span><span className="font-medium">{fmtMoney(pricing.installTotal)}</span></div>
+        <div className="flex justify-between"><span className="text-neutral-600">Adjusted Rate</span><span>{fmtMoney(pricing.rate)} / sq</span></div>
+        <div className="text-[11px] text-neutral-500 -mt-1 mb-1">Base {fmtMoney(pricing.baseRate)} + {appliedAdjustmentCount} × {fmtMoney(adjustmentPerSq)} = {fmtMoney(pricing.rate)}</div>
+        <div className="flex justify-between"><span className="text-neutral-600">Install ({pricing.used.toFixed(2)} sq × ${pricing.rate})</span><span className="font-medium">{fmtMoney(pricing.installTotal)}</span></div>
         <div className="flex justify-between"><span className="text-neutral-600">Extras</span><span className="font-medium">{fmtMoney(pricing.extrasTotal)}</span></div>
         <div className="border-t pt-2 flex justify-between font-semibold text-base">
           <span>Grand Total</span>

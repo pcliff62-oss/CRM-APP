@@ -44,8 +44,9 @@ export async function getCurrentUser(req?: NextRequest) {
   try {
     // Normalize any legacy/invalid roles before any reads
     try {
+      // Preserve MANAGER; only coerce truly invalid legacy roles
       await prisma.$executeRawUnsafe(
-        "UPDATE \"User\" SET role = 'ADMIN' WHERE UPPER(role) = 'OWNER' OR role NOT IN ('ADMIN','SALES','CREW','EMPLOYEE')"
+        "UPDATE \"User\" SET role = 'ADMIN' WHERE UPPER(role) = 'OWNER' OR role NOT IN ('ADMIN','SALES','CREW','EMPLOYEE','MANAGER')"
       );
     } catch {}
     return await ensureDemoUser(email);

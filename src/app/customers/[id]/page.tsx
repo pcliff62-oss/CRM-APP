@@ -27,7 +27,7 @@ async function createJob(leadId: string, formData: FormData) {
 export default async function CustomerDetail({ params }: { params: { id: string } }) {
   const contact = await prisma.contact.findUnique({
     where: { id: params.id },
-    include: { leads: { include: { property: true, assignee: true }, orderBy: { createdAt: 'desc' } } }
+  include: { leads: { include: { property: true, assignee: true }, orderBy: { createdAt: 'desc' } } }
   });
   if (!contact) return null;
   const lead = contact.leads[0];
@@ -109,7 +109,7 @@ export default async function CustomerDetail({ params }: { params: { id: string 
               // We intentionally do not block entire header if this fails; fallback is base contract only.
               return (
                 <>
-                  <PricingBanner leadId={lead.id} fallbackPrice={lead.contractPrice} />
+                  <PricingBanner leadId={lead.id} fallbackPrice={lead.contractPrice} depositReceived={contact?.depositReceived} />
                   <PricingLiveClient leadId={lead.id} />
                 </>
               );
@@ -309,23 +309,41 @@ function DocUploads({ contactId, leadId }: { contactId: string; leadId: string |
 // no folder grouping; "Documents" shown as a flat list
 
 // Server sub-component to render pricing breakdown banner
-async function PricingBanner({ leadId, fallbackPrice }: { leadId: string; fallbackPrice: number | null | undefined }) {
+async function PricingBanner({ leadId, fallbackPrice, depositReceived }: { leadId: string; fallbackPrice: number | null | undefined; depositReceived?: number | null }) {
   const breakdown = await pricingBreakdownForLead(leadId);
   const base = breakdown.contractPrice !== null ? breakdown.contractPrice : (typeof fallbackPrice === 'number' ? fallbackPrice : null);
   const extras = breakdown.extras;
   const extrasTotal = breakdown.extrasTotal;
   const grand = breakdown.grandTotal !== null ? breakdown.grandTotal : (base !== null ? base + extrasTotal : null);
+  // Fallback compute deposit sum if depositReceived not provided or zero
+  let depositDisplay = (typeof depositReceived === 'number' && isFinite(depositReceived)) ? depositReceived : 0;
+  if (!(depositDisplay > 0)) {
+    try {
+      const paidDeposits = await prisma.invoice.findMany({ where: { leadId, type: 'DEPOSIT', paidAt: { not: null } }, select: { paidAmount: true } });
+      depositDisplay = paidDeposits.reduce((s,i)=> s + (Number(i.paidAmount||0)||0), 0);
+    } catch {/* ignore */}
+  }
   if (base === null) return null;
   return (
     <div className="w-full">
       <div className="inline-flex items-start gap-3 rounded-md bg-emerald-50 border border-emerald-200 px-3 py-2 text-emerald-800 flex-col sm:flex-row sm:items-center sm:gap-4">
-        <div className="inline-flex items-center gap-2">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+        <div className="inline-flex items-start gap-2 bg-emerald-100 rounded px-3 py-2">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5 mt-0.5">
             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
             <path d="M22 4 12 14.01l-3-3" />
           </svg>
-          <span className="font-semibold">Approved contract price:</span>
-          <span className="tabular-nums">${base.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          <div className="flex flex-col text-sm leading-tight">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold">Approved contract price:</span>
+              <span className="tabular-nums">${base.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </div>
+            {depositDisplay > 0 && (
+              <div className="flex items-center gap-2 mt-1">
+                <span className="font-semibold">deposit amout received:</span>
+                <span className="tabular-nums">${depositDisplay.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+            )}
+          </div>
         </div>
         {extras.length > 0 && (
           <div className="text-xs sm:text-sm space-y-1">

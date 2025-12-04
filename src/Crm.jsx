@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import AppointmentCard from './features/calendar/AppointmentCard.jsx'
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
 
 /* ---- Small UI helpers ---- */
@@ -740,6 +741,7 @@ function Calendar({ darkMode }) {
   const [showDayView, setShowDayView] = useState(null);
   const [pendingDropDate, setPendingDropDate] = useState(null);
   const [hoveredDay, setHoveredDay] = useState(null);
+  const [activeApptId, setActiveApptId] = useState(null);
 
   // Load appointments from Next API and map to local shape
   // Helpers for client-side fallback
@@ -941,11 +943,12 @@ function Calendar({ darkMode }) {
                       <span className="text-xs font-semibold">{d ? d.getDate() : ""}</span>
                     </div>
         <div className="flex flex-col gap-1">
-                      {dayAppointments.map(app => (
+            {dayAppointments.map(app => (
                         <div
                           key={app.id}
                           draggable
                           onDragStart={() => setDraggedAppointment(app)}
+              onClick={(e)=>{ e.stopPropagation(); setActiveApptId(app.id) }}
                           className={`cursor-move px-1 py-0.5 rounded text-[11px] font-semibold text-left w-full max-w-full whitespace-normal break-words break-all overflow-hidden ${app._isJob ? (darkMode ? "bg-green-700 text-white" : "bg-green-200 text-green-900") : (darkMode ? "bg-blue-900 text-white" : "bg-blue-100 text-blue-900")}`}
                           style={{ lineHeight: "1.3", hyphens: "auto" }}
                         >
@@ -1034,12 +1037,22 @@ function Calendar({ darkMode }) {
           <ul className="space-y-1">
             {dayAppointments.map(app => (
               <li key={app.id} className="text-xs bg-blue-50 rounded px-2 py-1 flex justify-between items-center">
-                <span>{app.time} — {app.type} — {app.customer}</span>
+                <button type="button" className="underline hover:no-underline" onClick={()=> setActiveApptId(app.id)}>
+                  {app.time} — {app.type} — {app.customer}
+                </button>
               </li>
             ))}
           </ul>
         </div>
       </div>
+      {activeApptId && (
+        <AppointmentCard
+          id={activeApptId}
+          onClose={()=> setActiveApptId(null)}
+          onSaved={()=> { setActiveApptId(null); loadAppointments() }}
+          onDeleted={()=> { setActiveApptId(null); loadAppointments() }}
+        />
+      )}
     </div>
   );
 }
@@ -1264,7 +1277,7 @@ function Payroll({ darkMode }) {
               <div>Squares (total): {Number(selected.squares||0).toFixed(1)}</div>
               <div>Used Squares: <input type="number" step="0.1" defaultValue={selected.squaresUsed||selected.squares||0} className="border rounded px-2 py-1 w-24 ml-2" onBlur={e=>saveAdjustments({ squaresUsed: Number(e.target.value)||0 })} /></div>
               <div>Rate Tier: <input type="text" defaultValue={selected.rateTier||''} className="border rounded px-2 py-1 w-28 ml-2" onBlur={e=>saveAdjustments({ rateTier: e.target.value })} /></div>
-              <div>Rate / sq: $<input type="number" step="1" defaultValue={selected.ratePerSq||0} className="border rounded px-2 py-1 w-24 ml-1" onBlur={e=>saveAdjustments({ ratePerSq: Number(e.target.value)||0 })} /></div>
+              <div>$<input aria-label="Rate per square" placeholder="Rate / sq" type="number" step="1" defaultValue={selected.ratePerSq||0} className="border rounded px-2 py-1 w-24 ml-1" onBlur={e=>saveAdjustments({ ratePerSq: Number(e.target.value)||0 })} /></div>
               <div className="mt-2">Install Total: {fmt(selected.installTotal)}</div>
               <div>Extras Total: {fmt(selected.extrasTotal)}</div>
               <div className="font-semibold">Grand Total: {fmt(selected.grandTotal)}</div>
@@ -1544,6 +1557,8 @@ export default function Crm() {
             <SidebarButton active={tab === "prospects"} onClick={() => setTab("prospects")} darkMode={darkMode}>Prospects</SidebarButton>
             <SidebarButton active={tab === "jobs"} onClick={() => setTab("jobs")} darkMode={darkMode}>Jobs</SidebarButton>
             <SidebarButton active={tab === "communication"} onClick={() => setTab("communication")} darkMode={darkMode}>Communication</SidebarButton>
+            {/* Invoices navigates to the Next.js page */}
+            <SidebarButton active={false} onClick={() => { window.location.href = "/invoices"; }} darkMode={darkMode}>Invoices</SidebarButton>
             <SidebarButton active={tab === "archive"} onClick={() => setTab("archive")} darkMode={darkMode}>Archive</SidebarButton>
           </nav>
         </aside>

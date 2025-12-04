@@ -1507,11 +1507,204 @@ export default function NaivePolygonEditor(props: {
         vertices: f.geometry.coordinates[0].length,
         layerId: f.properties?.layerId || null
       }));
+
+      // ---------------------------
+      // Build accessoryList (normalized) similar to mobile editor
+      // ---------------------------
+      const accessoryList: any[] = [];
+      for (const f of features) {
+        const accs: any[] = (f as any).properties?.accessories || [];
+        for (const a of accs) {
+          let normType = 'other';
+          let variant: string | null = null;
+          if (a.type === 'Skylight') { normType = 'skylight'; variant = (a.data?.size||'').toUpperCase() || null; }
+          else if (a.type === 'Vents') { normType = 'vent'; variant = Array.isArray(a.data?.options) ? a.data.options.join(',') || null : null; }
+          else if (a.type === 'Pipe flange') { normType = 'pipe'; variant = a.data?.size || null; }
+          else if (a.type === 'Other') { normType = 'other'; variant = a.data?.note || null; }
+          else { normType = (a.type||'other').toLowerCase(); }
+          accessoryList.push({ id: a.id, type: normType, variant, x: a.x, y: a.y });
+        }
+      }
+
+      // ---------------------------
+      // Derive viewBox fallback if missing (tight bounds of all features)
+      // ---------------------------
+      let vb = viewBox;
+      if (!vb) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const f of features) {
+          for (const p of f.geometry.coordinates[0]) {
+            minX = Math.min(minX, p[0]);
+            minY = Math.min(minY, p[1]);
+            maxX = Math.max(maxX, p[0]);
+            maxY = Math.max(maxY, p[1]);
+          }
+        }
+        if (minX !== Infinity) {
+          const pad = 10; // light padding
+          vb = { x: minX - pad, y: minY - pad, w: (maxX - minX) + pad*2, h: (maxY - minY) + pad*2 };
+        } else if (size.w && size.h) {
+          vb = { x: 0, y: 0, w: size.w, h: size.h };
+        }
+      }
+
+      // ---------------------------
+      // Produce overlay-only snapshot PNG (no background image)
+      // ---------------------------
+      let overlayImageData: string | null = null;
+      try {
+        if (size.w > 0 && size.h > 0) {
+          const canvas = document.createElement('canvas');
+          canvas.width = size.w; canvas.height = size.h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('2d context unavailable');
+          const ctx2 = ctx as CanvasRenderingContext2D;
+          {
+            ctx2.save();
+            // Apply rotation so geometry matches on-screen orientation
+            const cx = size.w/2, cy = size.h/2;
+            ctx2.translate(cx, cy);
+            ctx2.rotate((angleDeg||0) * Math.PI/180);
+            ctx2.translate(-cx, -cy);
+            const edgeStroke = 4; // match svg stroke for main edges
+            // Draw roof plane edges
+            for (const f of features) {
+              const ring = f.geometry.coordinates[0];
+              const edges = (f.properties.edges || []) as { i:number; type: EdgeType }[];
+              for (let i=0;i<ring.length;i++) {
+                const a = ring[i];
+                const b = ring[(i+1)%ring.length];
+                const t = (edges.find(e=> e.i===i)?.type || 'unknown') as EdgeType;
+                ctx2.beginPath();
+                ctx2.moveTo(a[0], a[1]);
+                ctx2.lineTo(b[0], b[1]);
+                ctx2.strokeStyle = EDGE_COLORS[t] || '#9ca3af';
+                ctx2.lineWidth = edgeStroke;
+                ctx2.lineJoin = 'round';
+                ctx2.lineCap = 'round';
+                ctx2.stroke();
+              }
+            }
+            // Draw vertices
+            for (const f of features) {
+              const ring = f.geometry.coordinates[0];
+              for (const p of ring) {
+                ctx2.beginPath();
+                ctx2.arc(p[0], p[1], 2, 0, Math.PI*2);
+                ctx2.fillStyle = '#ff5252';
+                ctx2.fill();
+              }
+            }
+            // Prepare helpers for labels
+            function pitchFor(f: Feature) { return typeof f.properties?.pitch==='number' ? f.properties.pitch : defaultPitchIn12; }
+            function polyArea(ring: number[][]) { let a=0; for (let i=0;i<ring.length;i++){const [x1,y1]=ring[i]; const [x2,y2]=ring[(i+1)%ring.length]; a += x1*y2 - x2*y1;} return Math.abs(a)/2; }
+            function centroid(ring: number[][]) { let a=0,cx=0,cy=0; for (let i=0;i<ring.length;i++){const [x1,y1]=ring[i]; const [x2,y2]=ring[(i+1)%ring.length]; const f=x1*y2 - x2*y1; a+=f; cx+=(x1+x2)*f; cy+=(y1+y2)*f;} a*=0.5; if (Math.abs(a)<1e-6){ const sx=ring.reduce((s,p)=>s+p[0],0)/ring.length; const sy=ring.reduce((s,p)=>s+p[1],0)/ring.length; return {x:sx,y:sy}; } return {x:cx/(6*a), y:cy/(6*a)}; }
+            // Area ft² per feature (same proportional approach)
+            const totalSquares = computedTotals.totalSquares;
+            const totalFt2 = totalSquares ? totalSquares * 100 : null;
+            let weightedSum = 0; for (const f of features) { const ring = f.geometry.coordinates[0]; const a = polyArea(ring); const p = pitchFor(f); const mult = Math.sqrt(1 + Math.pow((p||0)/12,2)); weightedSum += a * mult; }
+            function areaFt2(f: Feature) { if (!totalFt2 || !weightedSum) return null; const ring = f.geometry.coordinates[0]; const a = polyArea(ring); const p = pitchFor(f); const mult = Math.sqrt(1 + Math.pow((p||0)/12,2)); return (a * mult * totalFt2) / weightedSum; }
+            // px->ft linear scale
+            let pxToFt: number | null = null;
+            if (totalFt2 && weightedSum) pxToFt = Math.sqrt(totalFt2 / weightedSum);
+            // Pitch & area labels, and edge length labels
+            for (const f of features) {
+              const ring = f.geometry.coordinates[0];
+              const c = centroid(ring);
+              const p = pitchFor(f);
+              const area = areaFt2(f);
+              const labelPitch = p===0 ? 'flat' : `${p}/12`;
+              const fontSize = 14; // fixed for snapshot
+              // counter-rotate text so it's upright
+              ctx2.save();
+              ctx2.translate(c.x, c.y);
+              ctx2.rotate(- (angleDeg||0) * Math.PI/180);
+              ctx2.translate(-c.x, -c.y);
+              ctx2.font = `${fontSize}px monospace`;
+              ctx2.textAlign = 'center';
+              ctx2.textBaseline = 'middle';
+              // Stroke + fill for contrast
+              function drawStrokedText(text: string, x: number, y: number) {
+                ctx2.lineWidth = fontSize/7; ctx2.strokeStyle = '#ffffff'; ctx2.strokeText(text, x, y); ctx2.fillStyle = '#111827'; ctx2.fillText(text, x, y);
+              }
+              drawStrokedText(labelPitch, c.x, c.y - fontSize*0.6);
+              if (area!=null) drawStrokedText(`${area.toFixed(0)} SqFt`, c.x, c.y + fontSize*0.6);
+              ctx2.restore();
+              // Edge length labels
+              if (pxToFt) {
+                const edges = (f.properties.edges || []) as { i:number; type: EdgeType }[];
+                for (let i=0;i<ring.length;i++) {
+                  const a = ring[i];
+                  const b = ring[(i+1)%ring.length];
+                  const dx = b[0]-a[0]; const dy = b[1]-a[1];
+                  const segLenPx = Math.hypot(dx, dy);
+                  const edgeType = (edges.find(e=> e.i===i)?.type || 'unknown') as EdgeType;
+                  const pitch = pitchFor(f);
+                  const pitchMult = Math.sqrt(1 + Math.pow((pitch||0)/12,2));
+                  const lenFt = segLenPx * pxToFt * pitchMult;
+                  if (lenFt < 0.5) continue;
+                  const midX = (a[0]+b[0])/2; const midY = (a[1]+b[1])/2;
+                  const segLen = Math.hypot(dx, dy) || 1;
+                  const nx = -dy/segLen; const ny = dx/segLen; // outward normal
+                  const offset = 12; const tx = midX + nx*offset; const ty = midY + ny*offset;
+                  ctx2.save();
+                  ctx2.translate(tx, ty);
+                  ctx2.rotate(- (angleDeg||0) * Math.PI/180);
+                  ctx2.translate(-tx, -ty);
+                  ctx2.font = '12px monospace'; ctx2.textAlign='center'; ctx2.textBaseline='middle';
+                  ctx2.lineWidth = 2; ctx2.strokeStyle='#ffffff'; ctx2.strokeText(`${lenFt.toFixed(1)}'`, tx, ty);
+                  ctx2.fillStyle='#111827'; ctx2.fillText(`${lenFt.toFixed(1)}'`, tx, ty);
+                  ctx2.restore();
+                }
+              }
+            }
+            // Accessories (green squares + labels)
+            for (const f of features) {
+              const accs: any[] = (f as any).properties?.accessories || [];
+              for (const acc of accs) {
+                ctx2.save();
+                ctx2.translate(acc.x, acc.y);
+                ctx2.rotate(- (angleDeg||0) * Math.PI/180);
+                ctx2.translate(-acc.x, -acc.y);
+                // square
+                ctx2.fillStyle = '#10b981';
+                ctx2.strokeStyle = '#065f46';
+                ctx2.lineWidth = 1.2;
+                ctx2.strokeRect(acc.x-3, acc.y-3, 6, 6);
+                ctx2.fillRect(acc.x-3, acc.y-3, 6, 6);
+                // label
+                const labelParts: string[] = [];
+                if (acc.type === 'Skylight' && acc.data?.size) labelParts.push(acc.data.size);
+                else if (acc.type === 'Vents' && acc.data?.options) labelParts.push(acc.data.options.join(','));
+                else if (acc.type === 'Pipe flange' && acc.data?.size) labelParts.push(acc.data.size);
+                else if (acc.type === 'Other' && acc.data?.note) labelParts.push(acc.data.note);
+                if (labelParts.length) {
+                  ctx2.font = '10px monospace';
+                  ctx2.textAlign='center'; ctx2.textBaseline='top';
+                  ctx2.lineWidth = 1.5; ctx2.strokeStyle='#ffffff'; ctx2.strokeText(labelParts.join(' '), acc.x, acc.y+7);
+                  ctx2.fillStyle='#111827'; ctx2.fillText(labelParts.join(' '), acc.x, acc.y+7);
+                }
+                ctx2.restore();
+              }
+            }
+            ctx2.restore();
+            overlayImageData = canvas.toDataURL('image/png');
+          }
+        }
+      } catch (e) {
+        // Non-fatal; proceed without snapshot
+        console.warn('overlay snapshot failed', e);
+      }
+
+      const canvasSize = { w: size.w, h: size.h };
+      const payload = { features, totals: computedTotals, accessoryBreakdown, planeSummaries, imageRotationDeg: angleDeg, saveToFiles: true, viewBox: vb, canvasSize, accessoryList, overlayImageData };
+      // Light debug summary for parity verification
+      try { console.log('[measurement-report] payload summary', { measurementId, featureCount: features.length, angleDeg, viewBox: vb, canvasSize, accessoryCount: accessoryList.length, overlay: !!overlayImageData }); } catch {}
       // Ask API to save report to Files
       const res = await fetch(`/api/measurements/${measurementId}/report`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ features, totals: computedTotals, accessoryBreakdown, planeSummaries, imageRotationDeg: angleDeg, saveToFiles: true })
+        body: JSON.stringify(payload)
       });
       if (!res.ok) {
         try {

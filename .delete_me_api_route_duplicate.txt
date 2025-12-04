@@ -1,0 +1,1 @@
+Manual action needed: Please delete src/app/api/users/me/route.js to resolve duplicate route with src/app/api/users/me/route.ts.

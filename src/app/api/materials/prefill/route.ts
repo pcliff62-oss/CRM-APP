@@ -10,6 +10,17 @@ function detectShingleType(txt: string): "Landmark" | "Landmark-PRO" | "Northgat
   return null;
 }
 
+// Map explicit Good/Better/Best style selections to shingle type
+function mapGbbToShingle(label: string | undefined | null): "Landmark" | "Landmark-PRO" | "Northgate" | null {
+  if (!label) return null;
+  const s = String(label).toLowerCase();
+  if (/\b(best)\b/.test(s)) return "Northgate"; // Best => Northgate
+  if (/\b(better)\b/.test(s)) return "Landmark-PRO"; // Better => Landmark PRO
+  if (/\b(good)\b/.test(s)) return "Landmark"; // Good => Landmark
+  // Also accept direct brand-style labels here as a fallback
+  return detectShingleType(s);
+}
+
 type DripType = "hicks_vent" | "aluminum_8" | "copper_5" | null;
 function detectDripType(txt: string): DripType {
   const s = txt.toLowerCase();
@@ -43,8 +54,15 @@ function pickStringByKeys(obj: any, keys: string[]): string | null {
   return null;
 }
 function detectShingleFromJson(obj: any): ReturnType<typeof detectShingleType> {
-  const s = pickStringByKeys(obj, ['shingle','shingletype','asphalt']);
-  return s ? detectShingleType(s) : null;
+  // Prefer explicit pricing selection fields when present (from proposal builder)
+  try {
+    const pricing = (obj && (obj.pricing || (obj as any)?.proposal?.pricing)) || ({} as any);
+    const sel = pricing?.asphaltSelectedLabel ?? pricing?.asphaltSelected ?? pricing?.asphaltTier ?? pricing?.asphaltGBB;
+    const mapped = mapGbbToShingle(sel);
+    if (mapped) return mapped;
+  } catch {}
+  const s = pickStringByKeys(obj, ['asphaltselectedlabel','asphaltselected','asphalttier','asphaltgbb','shingle','shingletype','asphalt']);
+  return s ? (mapGbbToShingle(s) || detectShingleType(s)) : null;
 }
 function detectIwFullFromJson(obj: any): boolean {
   try {
@@ -168,14 +186,24 @@ export async function GET(req: NextRequest) {
     const flashingFt = Math.round((Number(edgeTotals.flashing || 0)) * 100) / 100;
     const transitionFt = Math.round((Number(edgeTotals.transition || 0)) * 100) / 100;
 
-    // Proposal-derived selections
+  // Proposal-derived selections
     let shingleType: "Landmark" | "Landmark-PRO" | "Northgate" | null = null;
     let dripEaveType: DripType = null;
     let dripRakeType: DripType = null;
     let iwFull = false;
     let eaveColor: "white"|"black"|"brown"|"copper"|null = null;
     let rakeColor: "white"|"black"|"brown"|"copper"|null = null;
-  for (const p of lead.proposals || []) {
+    // Prefer most recent Accepted proposal, else most recent by createdAt
+    const proposals = (lead.proposals || []).slice().sort((a: any, b: any) => {
+      const sa = String(a?.status || '').toLowerCase() === 'accepted' ? 1 : 0;
+      const sb = String(b?.status || '').toLowerCase() === 'accepted' ? 1 : 0;
+      if (sa !== sb) return sb - sa; // Accepted first
+      const ta = new Date(a?.createdAt || 0).getTime();
+      const tb = new Date(b?.createdAt || 0).getTime();
+      return tb - ta; // newest first
+    });
+
+    for (const p of proposals) {
       const snap = p.snapshotJson ? (()=>{ try { return JSON.parse(p.snapshotJson); } catch { return null; } })() : null;
       if (!shingleType && snap) shingleType = detectShingleFromJson(snap) || shingleType;
       if (snap) iwFull = iwFull || detectIwFullFromJson(snap);
@@ -193,6 +221,14 @@ export async function GET(req: NextRequest) {
         if (!rakeColor && rClrTxt) rakeColor = detectColorStr(rClrTxt) || rakeColor;
       }
       const hay = [p.mergedHtml || "", p.templateBody || ""].join("\n");
+      // If snapshot didn't yield a shingle type, look for G/B/B labels inside templateBody too
+      if (!shingleType && p.templateBody) {
+        try {
+          const tplObj = JSON.parse(p.templateBody);
+          const mapped = detectShingleFromJson(tplObj);
+          if (mapped) shingleType = mapped;
+        } catch {}
+      }
       // Prefer line-specific detection for eave/rake
       const eLine = findDripLine(hay, 'eave');
       const rLine = findDripLine(hay, 'rake');

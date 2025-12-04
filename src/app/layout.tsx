@@ -39,6 +39,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               <NavLink href="/jobs">Jobs</NavLink>
               <NavLink href="/payroll">Payroll</NavLink>
               <NavLink href="/customers">Customers</NavLink>
+              {/* Add Invoices to sidebar */}
+              <NavLink href="/invoices">Invoices</NavLink>
               <NavLink href="/settings">Settings</NavLink>
             </nav>
           </aside>

@@ -98,7 +98,8 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     urlOut = `/uploads/${tenantId}/${filename}`;
   }
 
-  // Create File row
+  // Create File row (disabled per requirement: only keep Signed Proposal HTML record)
+  /*
   await prisma.file.create({
     data: {
       tenantId,
@@ -112,6 +113,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       size: pdfBuffer.length,
     }
   });
+  */
 
   // Move lead to APPROVED and add to contractPrice total if linked
   if (updated.leadId) {
@@ -127,6 +129,35 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       const add = parsedFromDom || Number((snapshot?.computed?.grandTotal) || (proposal.grandTotal ?? 0) || 0) || 0;
   const moved = await prisma.lead.update({ where: { id: updated.leadId }, data: { stage: "APPROVED", contractPrice: cur + add } });
   try { await scheduleJobForLead(moved.id); } catch {}
+  // Create a DEPOSIT invoice for 50% of contract price
+  try {
+    const tenantId = moved.tenantId;
+    const leadId = moved.id;
+    const count = await prisma.invoice.count({ where: { tenantId } });
+    const y = new Date();
+    const prefix = `${y.getFullYear()}${String(y.getMonth()+1).padStart(2,'0')}`;
+    const number = `${prefix}-${String(count + 1).padStart(4,'0')}`;
+    const contractPrice = add; // amount from this accepted proposal
+    const depositAmount = Math.round((contractPrice * 0.5) * 100) / 100;
+    // Create a DEPOSIT invoice with a single line item for the 50% deposit request
+  await prisma.invoice.create({
+      data: {
+        tenantId,
+        leadId,
+        contactId: lead?.contactId || undefined,
+        number,
+        // Initial deposit request should have status 'DEPOSIT' until paid, then transitions to 'PENDING'
+        status: 'DEPOSIT',
+        type: 'DEPOSIT',
+        contractPrice,
+        depositAmount: depositAmount,
+        extrasJson: undefined,
+        extrasTotal: 0,
+        totalDue: depositAmount,
+        dueDate: new Date(Date.now() + 14*24*60*60*1000),
+      }
+    });
+  } catch {}
   try {
     revalidatePath('/leads');
     revalidatePath('/customers');

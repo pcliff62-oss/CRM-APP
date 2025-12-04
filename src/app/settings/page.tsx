@@ -1,11 +1,10 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import CrewsManager from './CrewsManager'
 import dynamic from 'next/dynamic';
 import CompanyInfoForm from './CompanyInfoForm';
 import { getCurrentUser } from '@/lib/auth';
 import { Role } from '@prisma/client';
 const UsersManager = dynamic(() => import('./UsersManager'), { ssr: false });
-const SalesManager = dynamic(() => import('./SalesManager'), { ssr: false });
+// Removed CrewsManager and SalesManager sections
 
 export default async function SettingsPage() {
   const user = await getCurrentUser();
@@ -44,25 +43,7 @@ export default async function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Crews Manager */}
-      <Card className="lg:col-span-2">
-        <CardHeader className="bg-gradient-to-r from-slate-900 via-blue-900 to-blue-700 text-white rounded-t-xl">
-          <CardTitle className="text-white">Crews</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <CrewsManager />
-        </CardContent>
-      </Card>
-
-      {/* Sales Manager */}
-      <Card className="lg:col-span-2">
-        <CardHeader className="bg-gradient-to-r from-slate-900 via-blue-900 to-blue-700 text-white rounded-t-xl">
-          <CardTitle className="text-white">Sales</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <SalesManager />
-        </CardContent>
-      </Card>
+  {/* Crews and Sales sections removed */}
     </div>
   );
 }

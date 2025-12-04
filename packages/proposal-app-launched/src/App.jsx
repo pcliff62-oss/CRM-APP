@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import Annotator from './components/Annotator.jsx'
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import ImageModule from "docxtemplater-image-module-free";
@@ -5191,6 +5192,8 @@ function AsphaltLine({ label, selected, onSelect, mode, unitValue, onUnitChange,
 
 function PhotoAttach({ bucketId, photos, setPhotos }) {
   const list = photos[bucketId] || [];
+  const [annotateId, setAnnotateId] = React.useState(null);
+  const [annotateSrc, setAnnotateSrc] = React.useState(null);
   const add = (files) => {
     const arr = Array.from(files || []);
     arr.forEach((file) => {
@@ -5204,6 +5207,16 @@ function PhotoAttach({ bucketId, photos, setPhotos }) {
     });
   };
   const remove = (id) => setPhotos((p) => ({ ...p, [bucketId]: (p[bucketId] || []).filter((x) => x.id !== id) }));
+  const openAnnotate = (ph) => { setAnnotateId(ph.id); setAnnotateSrc(ph.dataURL); };
+  const onExport = (dataUrl) => {
+    if (!annotateId) return;
+    setPhotos((p) => ({
+      ...p,
+      [bucketId]: (p[bucketId] || []).map((x) => (x.id === annotateId ? { ...x, dataURL: dataUrl } : x)),
+    }));
+    setAnnotateId(null);
+    setAnnotateSrc(null);
+  };
   return (
     <div className="mt-3">
       <div className="text-xs font-medium mb-1">Photos</div>
@@ -5211,13 +5224,35 @@ function PhotoAttach({ bucketId, photos, setPhotos }) {
       <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
         {list.map((ph) => (
           <div key={ph.id} className="relative border rounded overflow-hidden">
-            <img src={ph.dataURL} alt={ph.name} className="w-full h-28 object-cover" />
+            <img src={ph.dataURL} alt={ph.name} className="w-full h-28 object-cover cursor-pointer" onClick={() => openAnnotate(ph)} />
             <button className="absolute top-1 right-1 bg-black/60 text-white text-xs px-1 rounded" onClick={() => remove(ph.id)}>
               ✕
+            </button>
+            <button
+              type="button"
+              aria-label="Annotate"
+              title="Annotate"
+              className="absolute top-1 left-1 z-10 h-6 w-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow ring-1 ring-white/80 hover:bg-emerald-700"
+              onClick={() => openAnnotate(ph)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                <path d="M12.146 2.146a.5.5 0 0 1 .708 0l5 5a.5.5 0 0 1 0 .708l-9.5 9.5a.5.5 0 0 1-.223.13l-5 1.5a.5.5 0 0 1-.63-.63l1.5-5a.5.5 0 0 1 .13-.223l9.5-9.5zM3.207 15.5l-.854 2.854L5.207 17.5 3.207 15.5zM13 3.207L4 12.207V14h1.793l9-9L13 3.207z" />
+              </svg>
             </button>
           </div>
         ))}
       </div>
+      {annotateId && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
+          <div className="bg-white rounded-xl shadow-xl p-3 w-[95vw] max-w-3xl">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-medium">Annotate Photo</div>
+              <button className="px-2 py-1 text-sm rounded bg-slate-100" onClick={() => { setAnnotateId(null); setAnnotateSrc(null); }}>Close</button>
+            </div>
+            <Annotator src={annotateSrc} width={900} height={600} onExport={onExport} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

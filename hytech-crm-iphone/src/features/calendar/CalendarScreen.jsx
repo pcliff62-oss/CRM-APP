@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react'
 import { todayLocal } from '../../lib/api.js'
 
-export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, reload }) {
+export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, reload, crewMode = false }) {
   const [filter, setFilter] = useState('all') // 'all' | 'job' | 'appt'
   const [view, setView] = useState('month') // 'day' | 'week' | 'month'
   const mountedRef = useRef(false)
@@ -20,6 +20,15 @@ export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, r
 
   const todayISO = todayLocal()
   const today = useMemo(() => new Date(), [])
+  // Month navigation state (anchor date representing currently displayed month)
+  const [displayedMonth, setDisplayedMonth] = useState(() => {
+    const d = new Date()
+    d.setDate(1)
+    d.setHours(0,0,0,0)
+    return d
+  })
+  const goPrevMonth = () => setDisplayedMonth(m => { const d = new Date(m.getFullYear(), m.getMonth()-1, 1); d.setHours(0,0,0,0); return d })
+  const goNextMonth = () => setDisplayedMonth(m => { const d = new Date(m.getFullYear(), m.getMonth()+1, 1); d.setHours(0,0,0,0); return d })
   function startOfWeek(d){ const x=new Date(d); const day=x.getDay(); x.setHours(0,0,0,0); x.setDate(x.getDate()-day); return x }
   function endOfWeek(d){ const x=startOfWeek(d); x.setDate(x.getDate()+6); x.setHours(23,59,59,999); return x }
   function startOfMonth(d){ const x=new Date(d.getFullYear(), d.getMonth(), 1); x.setHours(0,0,0,0); return x }
@@ -36,18 +45,20 @@ export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, r
       rangeStart = startOfWeek(today)
       rangeEnd = endOfWeek(today)
     } else if (view==='month') {
-      rangeStart = startOfMonth(today)
-      rangeEnd = endOfMonth(today)
+      // Use displayedMonth for month view rather than fixed today
+      rangeStart = startOfMonth(displayedMonth)
+      rangeEnd = endOfMonth(displayedMonth)
     }
     return (appts || []).filter(a => {
       const isJob = a.job || a.type === 'install'
+      if (crewMode) return isJob
       if (filter === 'job') return isJob
       if (filter === 'appt') return !isJob
       // Range filter
       const t = new Date(a.when)
       return t >= rangeStart && t <= rangeEnd
     })
-  }, [appts, filter, view, today])
+  }, [appts, filter, view, today, displayedMonth, crewMode])
 
   // Expand jobs across scheduled days (skip weekends) for month grid dots
   function expandJobsAcrossDays(items){
@@ -93,7 +104,7 @@ export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, r
   // Month grid (dots for jobs) + lines for selected day
   const [selectedDay, setSelectedDay] = useState('')
   const monthGrid = useMemo(() => {
-    const d = today
+    const d = displayedMonth
     const year = d.getFullYear()
     const month = d.getMonth()
     const first = new Date(year, month, 1)
@@ -116,7 +127,7 @@ export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, r
     }
     while (cells.length) rows.push(cells.splice(0,7))
     return rows
-  }, [expandedJobs, today])
+  }, [expandedJobs, displayedMonth])
 
   return (
     <div className="space-y-3">
@@ -126,23 +137,25 @@ export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, r
       </div>
       {/* Filter menu */}
       <div className="flex gap-2">
-        <div className="inline-flex rounded-lg border border-neutral-200 overflow-hidden text-xs">
-          <button
-            className={`px-3 py-1 ${filter==='all' ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-700'}`}
-            onClick={()=>setFilter('all')}
-            aria-pressed={filter==='all'}
-          >All</button>
-          <button
-            className={`px-3 py-1 ${filter==='job' ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-700'}`}
-            onClick={()=>setFilter('job')}
-            aria-pressed={filter==='job'}
-          >Job</button>
-          <button
-            className={`px-3 py-1 ${filter==='appt' ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-700'}`}
-            onClick={()=>setFilter('appt')}
-            aria-pressed={filter==='appt'}
-          >Appt</button>
-        </div>
+        {!crewMode && (
+          <div className="inline-flex rounded-lg border border-neutral-200 overflow-hidden text-xs">
+            <button
+              className={`px-3 py-1 ${filter==='all' ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-700'}`}
+              onClick={()=>setFilter('all')}
+              aria-pressed={filter==='all'}
+            >All</button>
+            <button
+              className={`px-3 py-1 ${filter==='job' ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-700'}`}
+              onClick={()=>setFilter('job')}
+              aria-pressed={filter==='job'}
+            >Job</button>
+            <button
+              className={`px-3 py-1 ${filter==='appt' ? 'bg-neutral-900 text-white' : 'bg-white text-neutral-700'}`}
+              onClick={()=>setFilter('appt')}
+              aria-pressed={filter==='appt'}
+            >Appt</button>
+          </div>
+        )}
         {/* View menu */}
         <div className="inline-flex rounded-lg border border-neutral-200 overflow-hidden text-xs">
           <button
@@ -164,6 +177,12 @@ export default function CalendarScreen({ appts = [], onSelect, onOpenCustomer, r
       </div>
       {view==='month' ? (
         <div className="bg-white rounded-2xl border border-neutral-200">
+          {/* Month navigation header */}
+          <div className="flex items-center justify-between px-4 pt-3 pb-2 text-sm font-medium select-none">
+            <button onClick={goPrevMonth} className="px-2 py-1 rounded hover:bg-neutral-100 active:bg-neutral-200" aria-label="Previous Month">◀</button>
+            <div>{displayedMonth.toLocaleDateString(undefined,{ month:'long', year:'numeric' })}</div>
+            <button onClick={goNextMonth} className="px-2 py-1 rounded hover:bg-neutral-100 active:bg-neutral-200" aria-label="Next Month">▶</button>
+          </div>
           <div className="grid grid-cols-7 gap-1 px-3 pb-3 text-xs select-none">
             {['S','M','T','W','T','F','S'].map(l => <div key={l} className="text-neutral-400 text-center py-1">{l}</div>)}
             {monthGrid.flat().map((c, i) => (
