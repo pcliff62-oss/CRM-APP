@@ -1437,6 +1437,64 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       } catch {}
     }
 
+    // Guarantee Asphalt TOTAL INVESTMENT rows stay visible and keep their pills, even if
+    // other section gating toggles ran earlier.
+    function ensureAsphaltTotalRows(container: HTMLElement) {
+      try {
+        const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
+        for (const tbl of tables) {
+          const ds = (tbl.getAttribute('data-section') || '').toLowerCase();
+          const txt = (tbl.textContent || '').toUpperCase();
+          if (!(ds.startsWith('roofing:asphalt') || /(ASPHALT|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txt))) continue;
+
+          const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+          const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*:/i.test(r.textContent || '')) || null;
+          if (!totalRow) continue;
+
+          // Make sure the row is visible (some earlier passes hide unused sections)
+          (totalRow as HTMLElement).style.display = '';
+
+          const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+          for (const cell of cells) {
+            // If pills already exist, leave them alone
+            if (cell.querySelector('label.price-choice')) continue;
+
+            // Build a pill around the first money token we can find
+            const moneyRe = /(\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?)/;
+            const text = cell.innerHTML;
+            let changed = false;
+            const html1 = text.replace(moneyRe, (m) => {
+              const amt = Number(m.replace(/[^0-9.\-]/g, ''));
+              if (!isFinite(amt)) return m;
+              changed = true;
+              return `<label class="price-choice gbb"><span>${m}</span><input type="checkbox" class="proposal-price-checkbox" data-amount="${amt}"></label>`;
+            });
+            if (changed) {
+              cell.innerHTML = html1;
+              continue;
+            }
+
+            // If no money text remains (template stripped numbers), append a placeholder pill
+            if (!cell.querySelector('input.proposal-price-checkbox')) {
+              const pill = document.createElement('label');
+              pill.className = 'price-choice gbb';
+              const span = document.createElement('span');
+              span.textContent = '$0.00';
+              const input = document.createElement('input');
+              input.type = 'checkbox';
+              input.className = 'proposal-price-checkbox';
+              input.setAttribute('data-amount', '0');
+              pill.appendChild(span);
+              pill.appendChild(input);
+              cell.appendChild(pill);
+            }
+          }
+
+          try { (totalRow as HTMLElement).setAttribute('data-gbb-authority', 'asphalt'); } catch {}
+        }
+      } catch {}
+    }
+
   // Color dropdowns removed; no-op
 
     // Ensure Trim photos are injected if the template loop didn't render them (strict table detection)
@@ -2700,6 +2758,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   try { normalizeRoofingTotalRows(root); } catch {}
   try { hideRoofingSelectionPrompt(root); } catch {}
   ensureNorthGateGBBPill(root);
+  ensureAsphaltTotalRows(root);
   ensureAsphaltColorBlank(root);
   stripNonTotalRoofingPills(root);
   // Color dropdowns removed
@@ -2735,7 +2794,8 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   try { hideRoofingSelectionPrompt(root); } catch {}
   try { ensureSidingSectionTotals(root); } catch {}
         ensureTrimPhotosFallback(root); 
-        ensureNorthGateGBBPill(root); 
+        ensureNorthGateGBBPill(root);
+        ensureAsphaltTotalRows(root);
         ensureAsphaltColorBlank(root); 
   stripNonTotalRoofingPills(root);
   // Tag sections and apply scoped money wrappers instead of global
@@ -2813,6 +2873,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           setupTrimSection();
           ensureTrimPhotosFallback(root);
           ensureNorthGateGBBPill(root);
+          ensureAsphaltTotalRows(root);
           ensureAsphaltColorBlank(root);
           stripNonTotalRoofingPills(root);
           // Color dropdowns removed
@@ -3074,6 +3135,26 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       }
       if (!finalTotalEl) finalTotalEl = finalCandidates[finalCandidates.length - 1];
     }
+    if (!finalTotalEl) {
+      // Fallback: if we couldn't find an existing TOTAL INVESTMENT label (some templates
+      // may have been trimmed by other enhancers), inject one at the end of the document
+      // so the running total remains visible for the signer.
+      const host = document.createElement('div');
+      host.className = 'final-total-fallback';
+      host.style.marginTop = '16px';
+      host.style.textAlign = 'center';
+      const label = document.createElement('b');
+      label.textContent = 'TOTAL INVESTMENT: ';
+      host.appendChild(label);
+      const span = document.createElement('span');
+      span.id = 'final-total-investment';
+      span.className = 'total-investment-final';
+      span.textContent = fmt(0).replace(/^\s*\$\s*/, '');
+      host.appendChild(span);
+      root.appendChild(host);
+      finalTotalEl = host;
+    }
+
     if (finalTotalEl && !finalTotalEl.querySelector('#final-total-investment')) {
       // Insert a numeric-only span after the first '$' within the final TOTAL INVESTMENT label
       const walker = document.createTreeWalker(finalTotalEl, NodeFilter.SHOW_TEXT);
