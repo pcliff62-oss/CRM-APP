@@ -12,10 +12,20 @@ export async function POST(req: NextRequest) {
     if (!snapshot || typeof snapshot !== "object") {
       return NextResponse.json({ error: "Missing snapshot" }, { status: 400 });
     }
+    // Persist cedarBase into snapshot.pricing if available from computed totals
+    try {
+      const computed = (snapshot as any)?.computed || {};
+      const prim = (computed?.primaryTotals || {}) as any;
+      const cedar = Number(prim?.cedar || 0);
+      if (isFinite(cedar) && cedar > 0) {
+        (snapshot as any).pricing = (snapshot as any).pricing || {};
+        (snapshot as any).pricing.cedarBase = cedar;
+      }
+    } catch {}
     const grandTotal = Number(snapshot?.computed?.grandTotal || 0) || null;
 
     // Persist a Proposal row using existing columns. We store the snapshot JSON in templateBody.
-    const data: any = {
+  const data: any = {
       tenantId,
       leadId: leadId || null,
       templateName,

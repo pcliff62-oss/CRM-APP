@@ -247,5 +247,19 @@ export function mapSnapshotToWeb(snapshot: any) {
     ["davinci_roof", "davinciroof", "davinci_total"]
   );
 
+  // Asphalt G/B/B totals with robust fallbacks
+  const asphaltGood =
+    num(pick('pricing.asphalt.good', 'pricing.roof.good', 'pricing.roofing.good', 'computed.primaryTotals.landmark', 'computed.primaryTotals.good')) ||
+    amtOf('asphalt_good_total', 'asphaltGood', 'good');
+  const asphaltBetter =
+    num(pick('pricing.asphalt.better', 'pricing.roof.better', 'pricing.roofing.better', 'computed.primaryTotals.landmarkPro', 'computed.primaryTotals.landmark_PRO', 'computed.primaryTotals.better')) ||
+    amtOf('asphalt_better_total', 'asphaltBetter', 'better');
+  const asphaltBest =
+    num(pick('pricing.asphalt.best', 'pricing.roof.best', 'pricing.roofing.best', 'computed.primaryTotals.northgate', 'computed.primaryTotals.best')) ||
+    amtOf('asphalt_best_total', 'asphaltBest', 'best');
+  expose('asphalt_good_total', asphaltGood, ['asphaltGood', 'good']);
+  expose('asphalt_better_total', asphaltBetter, ['asphaltBetter', 'better']);
+  expose('asphalt_best_total', asphaltBest, ['asphaltBest', 'best']);
+
   return view;
 }
