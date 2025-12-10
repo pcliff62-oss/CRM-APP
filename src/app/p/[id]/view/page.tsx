@@ -856,6 +856,19 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             (el as HTMLElement).style.removeProperty?.('visibility');
             (el as HTMLElement).style.removeProperty?.('opacity');
           }
+          // Also unhide any table row/section that holds this pill so pricing never collapses away
+          const row = (el as HTMLElement).closest?.('tr') as HTMLElement | null;
+          if (row) {
+            row.removeAttribute?.('hidden');
+            row.style.removeProperty?.('display');
+            row.style.removeProperty?.('visibility');
+          }
+          const table = (el as HTMLElement).closest?.('table') as HTMLElement | null;
+          if (table) {
+            table.removeAttribute?.('hidden');
+            table.style.removeProperty?.('display');
+            table.style.removeProperty?.('visibility');
+          }
           // Apply minimal inline styles to force visibility without clobbering bubble CSS
           if ((el as HTMLElement).matches?.('label.price-choice')) {
             const lab = el as HTMLElement;
@@ -1257,6 +1270,11 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             show = (flag === true) ? true : (flag === false ? false : null);
           }
           if (show === true || show === false) {
+            // Never hide a section that already contains pricing pills/checkboxes
+            if (show === false) {
+              const hasPricing = !!tbl.querySelector('label.price-choice, input.proposal-price-checkbox');
+              if (hasPricing) show = true;
+            }
             (tbl as HTMLElement).style.display = show ? '' : 'none';
           } else {
             (tbl as HTMLElement).style.removeProperty?.('display');
@@ -3153,6 +3171,12 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       host.appendChild(span);
       root.appendChild(host);
       finalTotalEl = host;
+    }
+
+    if (finalTotalEl) {
+      finalTotalEl.removeAttribute?.('hidden');
+      (finalTotalEl as HTMLElement).style.removeProperty?.('display');
+      (finalTotalEl as HTMLElement).style.removeProperty?.('visibility');
     }
 
     if (finalTotalEl && !finalTotalEl.querySelector('#final-total-investment')) {
