@@ -1258,8 +1258,19 @@ export function renderProposalTemplate(html: string, view: WebProposal, snap: an
       /<td[^>]*colspan=["']?4["']?[^>]*>\s*<b>\s*<u>\s*<span[^>]*>\s*TOTAL\s+INVESTMENT\s*:?\s*<\/span>\s*<\/u>\s*<\/b>\s*<\/td>/gi,
       ""
     );
+    // If Word wrapped TOTAL line in a span with inline-flex (hides content in some templates), unwrap it
+    replaced = replaced.replace(/<span[^>]*display:inline-flex[^>]*>([\s\S]*?TOTAL\s+INVESTMENT:[\s\S]*?)<\/span>/gi, '$1');
+    // Server-side fallback: if the Asphalt section has no visible TOTAL line, synthesize a label-only TOTAL row
+    // so client logic can detect and convert it into proper GBB pills.
+    const hasTotal = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(replaced);
+    if (!hasTotal) {
+      const row = '<tr><td colspan="4"><b><u><span>TOTAL INVESTMENT:</span></u></b></td></tr>';
+      // Insert before the closing </table> of the first table in this section
+      replaced = replaced.replace(/<\/table>/i, `${row}</table>`);
+    }
     return replaced;
   });
+  
   // Scoped cleanup: remove stray TOTAL INVESTMENT rows without a $amount ONLY within siding sections
   const stripTotalRows = (html: string): string => {
     return String(html || "").replace(

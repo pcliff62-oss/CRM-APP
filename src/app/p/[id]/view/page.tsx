@@ -4,6 +4,458 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { mapSnapshotToWeb } from "@/templates/hytech/field-map";
 import { renderProposalTemplate } from "@/lib/webProposal/render";
 
+// ...existing code...
+
+// Run only in the browser
+if (typeof window !== 'undefined') {
+  const moneyRe = /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/;
+
+  // Compute and display ONLY the final acceptance TOTAL INVESTMENT amount by summing all checked pills globally
+  const updateTotalInvestmentDisplays = () => {
+    try {
+      const fmtUSD = (n: number) => (isFinite(n) && n > 0 ? n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }) : '');
+      // Sum all checked proposal-price-checkbox inputs across the document
+      const inputs = Array.from(document.querySelectorAll('input.proposal-price-checkbox')) as HTMLInputElement[];
+  const sum = inputs.reduce((acc, inp) => {
+        const amt = Number(inp.getAttribute('data-amount') || '0');
+        return acc + (inp.checked && isFinite(amt) && amt > 0 ? amt : 0);
+      }, 0);
+  const finalSum = sum;
+      // Find acceptance area: confine to an element under an acceptance/signature container
+      const rxLabel = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+      const allLabelEls = Array.from(document.querySelectorAll('table, p, div, td, th, span, b, u, strong')) as HTMLElement[];
+      const isAcceptanceContainer = (el: HTMLElement): boolean => /ACCEPTANCE|TERMS|AGREEMENT|ACCEPTED\s+BY|OWNER\s+SIGNATURE|CUSTOMER\s+SIGNATURE/i.test(el.textContent || '');
+      // acceptance hosts: tables or blocks containing signature/acceptance phrases
+      const acceptanceHosts = Array.from(document.querySelectorAll('table, div, section')) as HTMLElement[];
+      const acceptanceContainers = acceptanceHosts.filter(isAcceptanceContainer);
+      // Find label element within acceptance containers only
+            // Aggressive: remove Word field markers and bookmarks that hijack hit-testing
+            if (totalP) {
+              try {
+                const killers = Array.from(totalP.querySelectorAll('[style*="mso-element:field-begin"], [style*="mso-element:field-end"], [style*="mso-element:field-separator"], [style*="mso-bookmark"], span[style*="mso-"]')) as HTMLElement[];
+                killers.forEach(k => { k.style.pointerEvents = 'none'; k.style.display = 'none'; });
+              } catch {}
+            }
+  let targetEl: HTMLElement | null = null;
+      for (let i = acceptanceContainers.length - 1; i >= 0; i--) {
+              const alt = cell?.querySelector('label.price-choice') as HTMLLabelElement | null;
+        const labelsInHost = Array.from(host.querySelectorAll('*')).filter((n: Element) => rxLabel.test(n.textContent || '')) as HTMLElement[];
+        // prefer the shallowest element that directly includes the label text (not only via children)
+        const direct = labelsInHost.find(el => {
+          const hasChildWithLabel = Array.from(el.querySelectorAll('*')).some(ch => rxLabel.test((ch as HTMLElement).textContent || ''));
+          return rxLabel.test(el.textContent || '') && !hasChildWithLabel;
+        }) || labelsInHost[0] || null;
+        if (direct) { targetEl = direct; break; }
+      }
+      if (!targetEl) return; // Do not fall back to anywhere to avoid polluting carpentry clauses
+      // If there is a dedicated final total element, update it directly and skip span insertion
+      const finalNode = targetEl.querySelector('#final-total-investment.total-investment-final') as HTMLElement | null;
+      if (finalNode) {
+        finalNode.textContent = fmtUSD(finalSum) || '';
+        return;
+      }
+  // Insert plain text before <o:p> if present; else after label text
+  const txt = fmtUSD(finalSum) || '';
+      let placed = false;
+  Array.from(targetEl.querySelectorAll('.trim-total-amount')).forEach((el: Element) => el.remove());
+      const op = targetEl.querySelector('o\\:p') as Element | null;
+      if (op && op.parentNode) {
+        const span = document.createElement('span');
+        span.className = 'trim-total-amount';
+        span.textContent = txt;
+        op.parentNode.insertBefore(span, op);
+        placed = true;
+      }
+      if (!placed) {
+        // Replace a text node containing the label with label + space + amount
+        const w = document.createTreeWalker(targetEl, NodeFilter.SHOW_TEXT);
+        while (w.nextNode()) {
+          const n = w.currentNode as Text;
+          const s = n.textContent || '';
+          const m = s.match(rxLabel);
+          if (!m) continue;
+          const end = s.search(rxLabel) + m[0].length;
+          const before = s.slice(0, end);
+          const after = s.slice(end);
+          const frag = document.createDocumentFragment();
+          frag.appendChild(document.createTextNode(before.replace(/\s+$/, ' ') + ' '));
+          const span = document.createElement('span'); span.className = 'trim-total-amount'; span.textContent = txt; frag.appendChild(span);
+          if (after) frag.appendChild(document.createTextNode(after));
+          (n.parentNode as Node).replaceChild(frag, n);
+          placed = true;
+          break;
+        }
+      }
+    } catch {}
+  };
+
+  const fmtUSD = (n: number) =>
+    isFinite(n) && n > 0 ? n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }) : '';
+
+  const mkPill = (n?: number, extra = '') => {
+    const lab = document.createElement('label');
+    lab.className = `price-choice${extra ? ` ${extra}` : ''}`;
+    const inp = document.createElement('input');
+    inp.type = 'checkbox';
+    inp.className = 'proposal-price-checkbox';
+  if (isFinite(Number(n)) && Number(n) > 0) inp.setAttribute('data-amount', String(n));
+    const sp = document.createElement('span');
+  const amt = Number(n);
+  sp.textContent = (isFinite(amt) && amt > 0) ? fmtUSD(amt) : '—';
+    lab.append(inp, sp);
+    return lab;
+  };
+
+  const scrubMoneyAfterLabel = (labelCell: Element) => {
+    const rx = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+    labelCell.querySelectorAll('.trim-total-amount,.trim-total-dollar').forEach(el => el.remove());
+    const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+    let seen = false;
+    const toRemove: Text[] = [];
+    while (walker.nextNode()) {
+      const tn = walker.currentNode as Text;
+      // skip text inside pills
+      let p: Node | null = tn.parentNode, inPill = false;
+      while (p) { if (p instanceof HTMLElement && p.matches('label.price-choice')) { inPill = true; break; } p = p.parentNode; }
+      if (inPill) continue;
+
+      const s = tn.textContent || '';
+      if (!seen && rx.test(s)) { seen = true; tn.textContent = s.replace(rx, m => m.replace(/\s+$/, '') + ' '); continue; }
+      if (seen && moneyRe.test(s)) {
+        const cleaned = s.replace(moneyRe, '').replace(/\s+/g, ' ').trim();
+        if (cleaned) tn.textContent = cleaned; else toRemove.push(tn);
+      }
+    }
+    toRemove.forEach(n => n.parentNode?.removeChild(n));
+  };
+
+  const getSnap = () => ((window as any).proposal?.snapshot) || {};
+  const getAsphaltTiers = () => {
+    const s = getSnap();
+    const pr = s?.pricing?.asphalt || s?.pricing?.roof || {};
+    return {
+      good: Number(pr?.good || 0),
+      better: Number(pr?.better || 0),
+      best: Number(pr?.best || 0),
+    };
+  };
+  const getDavinciTotal = () => {
+    const s = getSnap();
+    let dv = Number(s?.computed?.primaryTotals?.davinci || s?.pricing?.davinci?.total || 0);
+    if (!(isFinite(dv) && dv > 0)) {
+      const money = (document.body.innerText || '').match(moneyRe) || [];
+      const nums = money.map(v => Number(String(v).replace(/[^0-9.]/g, '').replace(/,/g, ''))).filter(v => isFinite(v) && v > 0);
+      if (nums.length) dv = Math.max(...nums);
+    }
+    return dv;
+  };
+
+  // Cedar roofing total: prefer snapshot computed primaryTotals.cedar, fallback to pricing.cedar.total
+  const getCedarTotal = () => {
+    const s = getSnap();
+    let cd = Number(s?.computed?.primaryTotals?.cedar || s?.pricing?.cedar?.total || 0);
+    // As a last resort, do NOT scan page money globally (to avoid siding interference); keep cedar independent
+    return cd;
+  };
+
+  const fixRoofingTotalsInit = () => {
+    const tables = Array.from(document.querySelectorAll('table'));
+    for (const t of tables) {
+      const text = (t.textContent || '').toUpperCase();
+      const isAsphalt = /(ASPHALT|SHINGLE|NORTHGATE|CLIMATEFLEX)/.test(text);
+      const isDavinci = /DAVINCI/.test(text);
+      const isCedar = /CEDAR/.test(text);
+      if (!isAsphalt && !isDavinci && !isCedar) continue;
+
+      const totalRow = Array.from(t.querySelectorAll('tr')).find(r => /TOTAL\s+INVESTMENT/i.test(r.textContent || ''));
+      if (!totalRow) continue;
+
+      const cells = Array.from(totalRow.querySelectorAll('td,th'));
+      if (!cells.length) continue;
+
+      // Word-export tables: label is reliably the first cell
+      const labelCell = cells[0];
+      const gbbCells = Array.from(totalRow.querySelectorAll('[data-gbb]'));
+
+      // 1) If row has GBB tier cells, never allow a label-cell pill; remove any existing one.
+      if (gbbCells.length > 0) {
+        labelCell.querySelectorAll('label.price-choice').forEach(el => el.remove());
+        scrubMoneyAfterLabel(labelCell);
+      }
+
+      // 2) Asphalt collapsed (Case A): no GBB cells => place original G/B/B pills inline on TOTAL INVESTMENT label cell
+      if (isAsphalt && gbbCells.length === 0) {
+        const tiers = getAsphaltTiers();
+        labelCell.querySelectorAll('label.price-choice').forEach(el => el.remove());
+        const pills = [mkPill(tiers.good, 'gbb'), mkPill(tiers.better, 'gbb'), mkPill(tiers.best, 'gbb')];
+        const rx = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+        const w = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+        let anchor: Text | null = null;
+        while (w.nextNode()) { const n = w.currentNode as Text; if (rx.test(n.textContent || '')) { anchor = n; break; } }
+        if (anchor) pills.forEach(p => labelCell.insertBefore(p, anchor.nextSibling)); else pills.forEach(p => labelCell.appendChild(p));
+        scrubMoneyAfterLabel(labelCell);
+        continue;
+      }
+
+      // 3) Single-make tables (DaVinci, Cedar): keep a single pill inline after label; remove centered/duplicate pills.
+      if (isDavinci || isCedar) {
+        // remove all pills from non-label cells
+        cells.slice(1).forEach(c => c.querySelectorAll('label.price-choice').forEach(el => el.remove()));
+        // replace pill in label cell
+        labelCell.querySelectorAll('label.price-choice').forEach(el => el.remove());
+        let amt = isDavinci ? getDavinciTotal() : getCedarTotal();
+        if (!(isFinite(amt) && amt > 0)) {
+          // Fallback: scan only within this table for the largest $ amount
+          try {
+            const text = (t.innerText || '').toString();
+            const rx = /\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/g;
+            let m: RegExpExecArray | null; let max = 0;
+            while ((m = rx.exec(text))) {
+              const val = Number(String(m[1] || '').replace(/,/g, ''));
+              if (isFinite(val) && val > max) max = val;
+            }
+            if (max > 0) amt = max;
+          } catch {}
+        }
+        const pill = mkPill(amt);
+
+        const rx = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+        const w = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+        let anchor: Text | null = null;
+        while (w.nextNode()) { const n = w.currentNode as Text; if (rx.test(n.textContent || '')) { anchor = n; break; } }
+        if (anchor) labelCell.insertBefore(pill, anchor.nextSibling); else labelCell.appendChild(pill);
+        scrubMoneyAfterLabel(labelCell);
+      }
+    }
+  };
+
+  // Prevent late reinsertion of label-cell pill on GBB rows by any other generic injector
+  const watch = new MutationObserver(() => {
+    // Ignore mutations inside roofing tables to prevent scrubbing pills
+    document.querySelectorAll('tr').forEach(tr => {
+      const parentTable = tr.closest('table');
+      const ds = (parentTable?.getAttribute('data-section') || '').toLowerCase();
+      if (ds.startsWith('roofing:')) return; // fence: do not mutate roofing totals here
+      if (!/TOTAL\s+INVESTMENT/i.test(tr.textContent || '')) return;
+      const cells = Array.from(tr.querySelectorAll('td,th')) as HTMLTableCellElement[];
+      const hasGBB = !!tr.querySelector('[data-gbb]');
+      const isSingleCellTotal = cells.length === 1 && ((cells[0].colSpan || 1) > 1);
+      const tableText = (tr.closest('table')?.textContent || '').toUpperCase();
+      const isAsphalt = /(ASPHALT|SHINGLE|NORTHGATE|CLIMATEFLEX)/.test(tableText);
+
+      if (isAsphalt && isSingleCellTotal) {
+        // Rebuild row into 4 cells with G/B/B pills, first cell blank
+        const tiers = getAsphaltTiers();
+        const newRow = document.createElement('tr');
+        const tdBlank = document.createElement('td'); tdBlank.style.textAlign = 'center';
+        const tdGood = document.createElement('td'); tdGood.setAttribute('data-gbb', 'good'); tdGood.style.textAlign = 'center';
+        const tdBetter = document.createElement('td'); tdBetter.setAttribute('data-gbb', 'better'); tdBetter.style.textAlign = 'center';
+        const tdBest = document.createElement('td'); tdBest.setAttribute('data-gbb', 'best'); tdBest.style.textAlign = 'center';
+        tdGood.appendChild(mkPill(tiers.good, 'gbb'));
+        tdBetter.appendChild(mkPill(tiers.better, 'gbb'));
+        tdBest.appendChild(mkPill(tiers.best, 'gbb'));
+        newRow.append(tdBlank, tdGood, tdBetter, tdBest);
+        const parent = tr.parentElement; if (parent) parent.replaceChild(newRow, tr);
+        return;
+      }
+
+      if (hasGBB) {
+        const first = tr.querySelector('td,th');
+        if (!first) return;
+        const pills = first.querySelectorAll('label.price-choice');
+        if (pills.length) pills.forEach(p => p.remove());
+        scrubMoneyAfterLabel(first);
+      }
+    });
+
+  // No prompt-row reinforcement; original logic keeps pills inline on TOTAL row
+  });
+
+  const start = () => {
+    // Ensure hidden prompt rows are forced visible
+    try {
+      const style = document.createElement('style');
+      style.setAttribute('data-proposal-style', 'prompt-visible');
+      style.textContent = `table tr[data-hidden-prompt="1"], table tr[data-force-visible="1"] { display: table-row !important; }`;
+      document.head.appendChild(style);
+    } catch {}
+  fixRoofingTotalsInit();
+    updateTotalInvestmentDisplays();
+    // Listen for checkbox changes to immediately recompute totals
+    try {
+      const root = document;
+      // Rubber: relocate embedded pill out of Word inline wrappers into the cell root for reliable interaction
+      try {
+        const rubberTable = document.querySelector('table[data-section="roofing:rubber"]') as HTMLTableElement | null;
+        if (rubberTable) {
+          const relocate = () => {
+            const totalRow = Array.from(rubberTable.querySelectorAll('tr')).find(r => /TOTAL\s+INVESTMENT/i.test(r.textContent || '')) as HTMLTableRowElement | undefined;
+            const cell = totalRow ? (Array.from(totalRow.querySelectorAll('td,th'))[0] as HTMLTableCellElement | undefined) : undefined;
+            const embedded = cell?.querySelector('p.MsoNormal label.price-choice') as HTMLLabelElement | null;
+            const totalP = cell?.querySelector('p.MsoNormal') as HTMLParagraphElement | null;
+            if (!cell || !embedded) return;
+            // Disable pointer events on Word field marker inline elements inside the TOTAL paragraph
+            if (totalP) {
+              try {
+                const nodes = Array.from(totalP.querySelectorAll('[style*="mso-element:field-begin"], [style*="mso-element:field-end"], [style*="mso-bookmark"], [style*="mso-element:field-separator"]')) as HTMLElement[];
+                nodes.forEach(n => { n.style.pointerEvents = 'none'; });
+              } catch {}
+            }
+            const amt = Number(embedded.querySelector('input.proposal-price-checkbox')?.getAttribute('data-amount') || 0);
+            const checked = !!embedded.querySelector('input.proposal-price-checkbox')?.checked;
+            const newLab = document.createElement('label'); newLab.className = 'price-choice'; newLab.style.marginLeft = '6px'; newLab.style.cursor = 'pointer'; newLab.style.display = 'inline-flex'; newLab.style.gap = '6px'; newLab.style.alignItems = 'center';
+            const newCb = document.createElement('input'); newCb.type = 'checkbox'; newCb.className = 'proposal-price-checkbox'; if (isFinite(amt) && amt > 0) newCb.setAttribute('data-amount', String(amt)); newCb.checked = checked;
+            const newSp = document.createElement('span'); newSp.textContent = fmtUSD(amt) || '—';
+            newLab.append(newCb, newSp);
+            if (totalP && totalP.parentNode) {
+              try { totalP.style.pointerEvents = 'none'; } catch {}
+              const wrap = document.createElement('div'); wrap.style.pointerEvents = 'auto'; wrap.style.display = 'inline-block'; wrap.appendChild(newLab);
+              totalP.parentNode.insertBefore(wrap, totalP.nextSibling);
+            } else {
+              cell.appendChild(newLab);
+            }
+            embedded.remove();
+            // Cell-level click: toggle pill checkbox unless click is on the checkbox itself
+            cell.addEventListener('click', (e) => {
+              const target = e.target as HTMLElement | null;
+              const cb = cell.querySelector('label.price-choice input.proposal-price-checkbox') as HTMLInputElement | null;
+              if (!cb) return;
+              if (target === cb) return;
+              e.preventDefault();
+              cb.checked = !cb.checked;
+              cb.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+          };
+          // Run now and whenever the rubber table mutates
+          relocate();
+          const obs = new MutationObserver(() => relocate());
+          obs.observe(rubberTable, { childList: true, subtree: true });
+        }
+      } catch {}
+      root.addEventListener('change', (e) => {
+        const t = e.target as HTMLElement;
+        if (t && (t as HTMLInputElement).type === 'checkbox' && t.classList.contains('proposal-price-checkbox')) {
+          try { updateTotalInvestmentDisplays(); } catch {}
+        }
+      });
+      // Ensure clicking the price pill label toggles its checkbox (helps rubber pill selection)
+      root.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement | null;
+        const lab = target?.closest('label.price-choice') as HTMLLabelElement | null;
+        if (!lab) return;
+        const cb = lab.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null;
+        if (!cb || cb.disabled) return;
+        // If user clicked directly on the checkbox, let native behavior run
+        if (target === cb) return;
+        // Otherwise, toggle and emit change
+        try { lab.style.pointerEvents = 'auto'; lab.style.cursor = 'pointer'; } catch {}
+        e.preventDefault();
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      }, { capture: true });
+
+      // Rubber-specific: normalize pill styles and attach direct handlers to avoid Word overlays blocking clicks
+      const rubber = document.querySelector('table[data-section="roofing:rubber"]') as HTMLElement | null;
+      if (rubber) {
+        const lab = rubber.querySelector('label.price-choice') as HTMLLabelElement | null;
+        const cb = lab?.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null;
+        const sp = lab?.querySelector('span') as HTMLSpanElement | null;
+        try {
+          rubber.style.pointerEvents = 'auto';
+          const td = rubber.querySelector('td,th') as HTMLElement | null;
+          if (td) td.style.pointerEvents = 'auto';
+          // Disable pointer events on surrounding text nodes (u, b, span) except the pill
+          const totalP = rubber.querySelector('tr td p.MsoNormal') as HTMLElement | null;
+          if (totalP) {
+            totalP.querySelectorAll('u, b, span').forEach(el => { if (!(el as HTMLElement).querySelector('label.price-choice')) (el as HTMLElement).style.pointerEvents = 'none'; });
+          }
+          if (lab) { lab.style.pointerEvents = 'auto'; lab.style.cursor = 'pointer'; lab.style.display = 'inline-flex'; lab.style.gap = '6px'; lab.style.alignItems = 'center'; lab.style.position = 'relative'; lab.style.zIndex = '2'; }
+          if (cb) {
+            cb.style.pointerEvents = 'auto'; cb.tabIndex = 0; cb.disabled = false; cb.style.position = 'relative'; cb.style.zIndex = '3';
+            // Assign a stable id and link label to input for native toggling
+            if (!cb.id) cb.id = 'rubber-pill-checkbox';
+            if (lab) lab.htmlFor = cb.id;
+          }
+          if (sp) { sp.style.pointerEvents = 'none'; }
+        } catch {}
+        // Rely on native label-for association; no extra handlers needed
+      }
+
+      // Rubber fallback: append a centered clickable pill under the table
+      try {
+        const tbl = document.querySelector('table[data-section="roofing:rubber"]') as HTMLElement | null;
+        if (tbl && !document.querySelector('[data-rubber-fallback-pill="1"]')) {
+          // Determine amount from existing pill or snapshot
+          const existingLab = tbl.querySelector('label.price-choice') as HTMLLabelElement | null;
+          const existingCb = existingLab?.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null;
+          let amt = Number(existingCb?.getAttribute('data-amount') || 0);
+          if (!(isFinite(amt) && amt > 0)) {
+            try { amt = Number(((getSnap() as any)?.computed?.primaryTotals?.rubber) || ((getSnap() as any)?.pricing?.rubber?.total) || 0); } catch {}
+          }
+          if (!(isFinite(amt) && amt > 0)) amt = 0;
+          const p = document.createElement('p');
+          p.style.textAlign = 'center';
+          p.style.margin = '8px 0 6px 0';
+          p.setAttribute('data-rubber-fallback-pill', '1');
+          const strong = document.createElement('strong'); strong.textContent = 'TOTAL INVESTMENT:'; strong.style.marginRight = '6px';
+          const lab2 = document.createElement('label'); lab2.className = 'price-choice'; lab2.style.cursor = 'pointer'; lab2.style.display = 'inline-flex'; lab2.style.gap = '6px'; lab2.style.alignItems = 'center';
+          const cb2 = document.createElement('input'); cb2.type = 'checkbox'; cb2.className = 'proposal-price-checkbox'; if (amt > 0) cb2.setAttribute('data-amount', String(amt));
+          const sp2 = document.createElement('span'); sp2.textContent = fmtUSD(amt) || '—';
+          lab2.append(cb2, sp2);
+          p.append(strong, lab2);
+          if (tbl.parentNode) {
+            if (tbl.nextSibling) tbl.parentNode.insertBefore(p, tbl.nextSibling); else tbl.parentNode.appendChild(p);
+          }
+          // Toggle on label/span clicks (native checkbox clicks work automatically)
+          const toggle = (e: Event) => { if (e.target === cb2) return; e.preventDefault(); cb2.checked = !cb2.checked; cb2.dispatchEvent(new Event('change', { bubbles: true })); };
+          lab2.addEventListener('click', toggle);
+          sp2.addEventListener('click', toggle);
+        }
+      } catch {}
+    } catch {}
+    watch.observe(document.body, { childList: true, subtree: true });
+
+    // Late refresh: retry cedar/davinci pill amounts after snapshot/template hydration
+    try {
+      let attempts = 0;
+      const maxAttempts = 10;
+      const interval = setInterval(() => {
+        attempts++;
+        try {
+          const fixTable = (tbl: HTMLElement, amt: number) => {
+            const row = Array.from(tbl.querySelectorAll('tr')).find(r => /TOTAL\s+INVESTMENT/i.test(r.textContent || '')) as HTMLTableRowElement | undefined;
+            const cell = row ? (Array.from(row.querySelectorAll('td,th'))[0] as HTMLTableCellElement | undefined) : undefined;
+            const lab = cell?.querySelector('label.price-choice') as HTMLLabelElement | null;
+            if (!lab) return;
+            const inp = lab.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null;
+            const sp = lab.querySelector('span') as HTMLSpanElement | null;
+            const needs = !inp?.getAttribute('data-amount') || (sp && /—|^\s*$/.test(sp.textContent || ''));
+            if (!needs) return;
+            if (isFinite(amt) && amt > 0) {
+              inp?.setAttribute('data-amount', String(amt));
+              if (sp) sp.textContent = fmtUSD(amt);
+            }
+          };
+          const cedarAmt = Number(((getSnap() as any)?.computed?.primaryTotals?.cedar) || ((getSnap() as any)?.pricing?.cedar?.total) || 0);
+          const davinciAmt = Number(((getSnap() as any)?.computed?.primaryTotals?.davinci) || ((getSnap() as any)?.pricing?.davinci?.total) || 0);
+          const cedarTables = Array.from(document.querySelectorAll('table[data-section="roofing:cedar"]')) as HTMLElement[];
+          const davinciTables = Array.from(document.querySelectorAll('table[data-section="roofing:davinci"]')) as HTMLElement[];
+          cedarTables.forEach(t => fixTable(t, cedarAmt));
+          davinciTables.forEach(t => fixTable(t, davinciAmt));
+        } catch {}
+        if (attempts >= maxAttempts) clearInterval(interval);
+      }, 250);
+    } catch {}
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    queueMicrotask(start);
+  }
+}
+// ...existing code...
+
 export default function ProposalView({ params }: { params: { id: string } }) {
   const id = params.id;
   const [loading, setLoading] = useState(true);
@@ -29,6 +481,10 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         if (!mounted) return;
         setProposal(data);
         setSnapshot(data?.snapshot || {});
+        try {
+          (window as any).proposal = data;
+          (window as any).hytechDebug = { ...(window as any).hytechDebug, snapshot: (data?.snapshot || {}) };
+        } catch {}
       } catch (e: any) {
         if (!mounted) return;
         setErr(e?.message || "Failed to load");
@@ -77,6 +533,60 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   const renderedHtmlRef = useRef<string>("");
   const totalRef = useRef<number>(0);
   const cleanupFnsRef = useRef<Array<() => void>>([]);
+
+  // Builder: create Asphalt GBB TOTAL row when template collapses it (Case A)
+  function buildAsphaltGbbIfMissing(root: HTMLElement) {
+    try {
+      const tables = Array.from(root.querySelectorAll('table')) as HTMLTableElement[];
+      const looksPricing = (t: HTMLTableElement) => /(PRICING\s*:|PRICING)/i.test(t.textContent || '');
+      const hasGBBHeaders = (t: HTMLTableElement) => /(GOOD|BETTER|BEST)/i.test(t.textContent || '');
+      const asphaltish = (t: HTMLTableElement) => /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/i.test(t.textContent || '');
+      const fmtUSD = (n: number) => (isFinite(n) && n > 0 ? n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }) : '');
+      const tiers = (() => {
+        const s: any = snapshot || {};
+        const pr = (s?.pricing?.asphalt) || (s?.pricing?.roof) || {};
+        return {
+          good: Number(pr?.good || pr?.northgateGood || pr?.climateflexGood || 0) || 0,
+          better: Number(pr?.better || pr?.northgateBetter || pr?.climateflexBetter || 0) || 0,
+          best: Number(pr?.best || pr?.northgateBest || pr?.climateflexBest || 0) || 0,
+        };
+      })();
+      for (const t of tables) {
+        if (!looksPricing(t) || !hasGBBHeaders(t) || !asphaltish(t)) continue;
+        const rows = Array.from(t.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+        // If a GBB row already exists, skip
+        if (totalRow && totalRow.querySelector('[data-gbb]')) continue;
+        // If there's a single-cell TOTAL row, remove it before building
+        if (totalRow) {
+          const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLTableCellElement[];
+          const singleCell = (cells.length === 1) && ((cells[0].colSpan || 1) > 1);
+          if (singleCell) totalRow.remove();
+        }
+        // Build new TOTAL row with label + G/B/B cells
+        const tr = document.createElement('tr');
+        const tdLabel = document.createElement('td');
+        tdLabel.style.textAlign = 'center';
+        tdLabel.innerHTML = '<b><u><span style="font-size:11pt">TOTAL Investment </span></u></b><b><span style="font-size:11pt">:<\/span><\/b>';
+        const tdGood = document.createElement('td'); tdGood.setAttribute('data-gbb', 'good'); tdGood.style.textAlign = 'center';
+        const tdBetter = document.createElement('td'); tdBetter.setAttribute('data-gbb', 'better'); tdBetter.style.textAlign = 'center';
+        const tdBest = document.createElement('td'); tdBest.setAttribute('data-gbb', 'best'); tdBest.style.textAlign = 'center';
+        // Create pills (checkbox + span)
+        const pill = (n: number) => {
+          const lab = document.createElement('label'); lab.className = 'price-choice gbb';
+          const inp = document.createElement('input'); inp.type = 'checkbox'; inp.className = 'proposal-price-checkbox'; if (n>0) inp.setAttribute('data-amount', String(n));
+          const sp = document.createElement('span'); sp.textContent = n>0 ? fmtUSD(n) : '';
+          lab.append(inp, sp); return lab;
+        };
+        tdGood.appendChild(pill(tiers.good));
+        tdBetter.appendChild(pill(tiers.better));
+        tdBest.appendChild(pill(tiers.best));
+        tr.append(tdLabel, tdGood, tdBetter, tdBest);
+        const tbody = t.querySelector('tbody');
+        (tbody || t).appendChild(tr);
+      }
+    } catch {}
+  }
 
   // Helper: ensure a display overlay div exists in the signature cell
   const ensureSignatureDisplay = (): { host: HTMLElement | null; display: HTMLElement | null } => {
@@ -274,6 +784,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     try {
       root.innerHTML = html || "";
     } catch {}
+  // Remove builder for prompt-row/alternate GBB rows; keep original TOTAL-row pills only
+  // Replace known {placeholders} like {davinci_total}/{cedar_total} before gating, so hasPrice() detects $ values
+  try { replaceKnownPlaceholders(root); } catch {}
   (function undoPriceCellBordersEnhancement(){
       try {
     // Do NOT remove global style tags or classes anymore; those are used by the base
@@ -300,6 +813,12 @@ export default function ProposalView({ params }: { params: { id: string } }) {
   .proposal-html table[data-section^="roofing:"]{ width:100% !important; table-layout:auto !important; float:none !important; }
   .proposal-html table[data-section^="roofing:"] td,
   .proposal-html table[data-section^="roofing:"] th{ vertical-align: top; }
+  /* Center TOTAL INVESTMENT label and pill inline */
+  .proposal-html table[data-section^="roofing:"] tr:has(td:matches( :contains("TOTAL INVESTMENT") )) td,
+  .proposal-html table[data-section^="roofing:"] tr:has(th:matches( :contains("TOTAL INVESTMENT") )) th{
+    text-align: center !important;
+  }
+  .proposal-html table[data-section^="roofing:"] label.price-choice{ display:inline-flex !important; vertical-align:middle !important; }
 
   /* Force price checkboxes to render as pill containers */
   .proposal-html label.price-choice {
@@ -322,6 +841,8 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     white-space: nowrap !important; /* prevent breaking within price text */
     word-break: normal !important;
     overflow-wrap: normal !important;
+  font-size: 14pt !important;
+  font-family: "Times New Roman", serif !important;
   }
   /* Checkbox inside pill */
   .proposal-html label.price-choice input.proposal-price-checkbox,
@@ -386,6 +907,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     box-sizing: border-box !important;
   }
   
+
   .signature-section-right {
     width: calc(50% - 10px) !important;
     float: right !important;
@@ -417,10 +939,152 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       } catch {}
     })();
 
+    // Compute a robust Cedar total from snapshot when computed.primaryTotals.cedar is missing
+    function getEffectiveCedarTotalFromSnapshot(): number {
+      try {
+        const s: any = snapshot || {};
+        const prim = (s?.computed?.primaryTotals || {}) as any;
+        const v0 = Number(prim?.cedar || 0);
+        if (isFinite(v0) && v0 > 0) return v0;
+        const pricing: any = s?.pricing || {};
+        const scope: any = s?.scope || s?.workScope || {};
+        const num = (x: any) => { const n = Number(x || 0); return isFinite(n) ? n : 0; };
+        const round2 = (x: number) => Math.round(x * 100) / 100;
+        // Try to infer effective squares from common locations
+        const effSquares = (() => {
+          const m = s?.measure || {};
+          const roofSquares = num(m?.roofSquares || m?.roof_squares || m?.roof?.squares);
+          const pSquares = num(pricing?.roof?.squares || pricing?.squares || pricing?.cedarSquares);
+          return roofSquares || pSquares || 0;
+        })();
+        const mode = String(pricing?.cedarMode || 'bySquare').toLowerCase();
+        let base = 0;
+        if (mode === 'bysquare' || mode === 'bySquare') {
+          base = round2(effSquares * num(pricing?.cedarUnit || 0));
+          if (pricing?.cedarIncludeWovenCaps) base += 45 * num(pricing?.cedarWovenCapsFeet || 0);
+          const squares = num((pricing as any)?.cedarPlywoodSquares ?? pricing?.plywood?.squares);
+          const cond = String(scope?.cedar?.plywoodCondition || '').toLowerCase();
+          if (cond === 'replace') base += 360 * squares;
+          if (cond === 'newoverboards' || cond === 'newoverboards') base += 330 * squares;
+        } else {
+          base = num(pricing?.cedarManual || 0);
+          if (pricing?.cedarIncludeWovenCaps) base += 45 * num(pricing?.cedarWovenCapsFeet || 0);
+        }
+        return base > 0 ? round2(base) : 0;
+      } catch { return 0; }
+    }
+
+    // Word sometimes splits tokens like {cedar_total} across inline tags: {<span>cedar_total</span>}
+    // This pass collapses those split tokens into actual amounts using snapshot totals,
+    // so later pill injection finds a contiguous $ value.
+    function expandSplitTokens(container: HTMLElement) {
+      try {
+        // Build a small token->value map from snapshot primary totals
+        const primRaw = (((snapshot as any)?.computed?.primaryTotals) || {}) as Record<string, any>;
+        // Ensure cedar has a value if we can compute it from pricing/scope
+        const prim = { ...primRaw } as Record<string, any>;
+        try {
+          const cedar = Number(prim.cedar || 0);
+          if (!(isFinite(cedar) && cedar > 0)) {
+            const calc = getEffectiveCedarTotalFromSnapshot();
+            if (calc > 0) prim.cedar = calc;
+          }
+        } catch {}
+        const fmtUsd = (n: number) => {
+          const v = Number(n || 0);
+          if (!isFinite(v) || v <= 0) return '';
+          try { return v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); }
+          catch { return `$${(Math.round(v * 100) / 100).toFixed(2)}`; }
+        };
+        const amountFor = (key: string): string => {
+          const lookups = [key, key.replace(/_/g, ''), key.replace(/([A-Z])/g, '_$1').toLowerCase()];
+          for (const k of lookups) {
+            const v = Number((prim as any)[k]);
+            if (isFinite(v) && v > 0) return fmtUsd(v);
+          }
+          // Cedar-specific fallback when aliases miss
+          if (/(cedar|cedarshake)/i.test(key)) {
+            const v = getEffectiveCedarTotalFromSnapshot();
+            if (v > 0) return fmtUsd(v);
+          }
+          return '';
+        };
+        const known: Array<[string, string[]]> = [
+          ['cedar_total',   ['cedar', 'cedarShakeRoof', 'cedarShake']],
+          ['davinci_total', ['davinci', 'davinciRoof']],
+          ['rubber_total',  ['rubber', 'rubberRoof']],
+          ['asphalt_total', ['asphalt', 'asphaltRoof', 'asphalt_gbb_total', 'asphalt_total']],
+        ];
+        const tokenNames = new Set<string>(known.map(([t]) => t));
+        const aliasMap = new Map<string, string[]>();
+        for (const [t, aliases] of known) aliasMap.set(t, aliases);
+
+        // Helper to get previous/next meaningful text node
+        const prevText = (n: Node | null): Text | null => {
+          let p: Node | null = n ? n.previousSibling : null;
+          while (p) {
+            if (p.nodeType === Node.TEXT_NODE && /\S/.test((p as Text).textContent || '')) return p as Text;
+            if ((p as HTMLElement).lastChild) { p = (p as HTMLElement).lastChild as Node; continue; }
+            p = p.previousSibling;
+          }
+          return null;
+        };
+        const nextText = (n: Node | null): Text | null => {
+          let p: Node | null = n ? n.nextSibling : null;
+          while (p) {
+            if (p.nodeType === Node.TEXT_NODE && /\S/.test((p as Text).textContent || '')) return p as Text;
+            if ((p as HTMLElement).firstChild) { p = (p as HTMLElement).firstChild as Node; continue; }
+            p = p.nextSibling;
+          }
+          return null;
+        };
+
+        const nodes = Array.from(container.querySelectorAll('*')) as HTMLElement[];
+        for (const el of nodes) {
+          // Find a child whose textContent is a bare token name (possibly with whitespace)
+          const kids = Array.from(el.childNodes);
+          for (const kid of kids) {
+            const text = (kid.textContent || '').replace(/\s+/g, '').trim();
+            if (!text) continue;
+            if (!tokenNames.has(text)) continue;
+            const left = prevText(kid);
+            const right = nextText(kid);
+            if (!left || !right) continue;
+            const L = left.textContent || '';
+            const R = right.textContent || '';
+            if (!/\{\s*$/.test(L) || !/^\s*\}/.test(R)) continue;
+            // Determine value for this token from aliases/primary totals
+            const aliases = aliasMap.get(text) || [];
+            let val = '';
+            for (const a of [text, ...aliases]) { val = amountFor(a); if (val) break; }
+            if (!val) continue;
+            // Trim the { and } braces and replace the triplet with a formatted value
+            try {
+              left.textContent = L.replace(/\{\s*$/, '');
+              right.textContent = R.replace(/^\s*\}/, '');
+              // Insert value node right after left
+              const parent = left.parentNode as Node | null;
+              if (parent) parent.insertBefore(document.createTextNode(val), left.nextSibling);
+              // Remove the token node itself
+              if (kid.parentNode) kid.parentNode.removeChild(kid);
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+
     // Resolve leftover {placeholders} for roofing totals (e.g., {cedar_shake_total}, {davinci_total})
     function replaceKnownPlaceholders(container: HTMLElement) {
       try {
-        const prim = (((snapshot as any)?.computed?.primaryTotals) || {}) as Record<string, any>;
+        const primBase = (((snapshot as any)?.computed?.primaryTotals) || {}) as Record<string, any>;
+        const prim = { ...primBase } as Record<string, any>;
+        try {
+          const cedar = Number(prim.cedar || 0);
+          if (!(isFinite(cedar) && cedar > 0)) {
+            const calc = getEffectiveCedarTotalFromSnapshot();
+            if (calc > 0) prim.cedar = calc;
+          }
+        } catch {}
         const fmtUsd = (n: number) => {
           const v = Number(n || 0);
           if (!isFinite(v) || v <= 0) return '';
@@ -441,7 +1105,8 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           return 0;
         };
 
-        const cedarAmt = getAmt('cedarShakeRoof', 'cedarShake', 'cedar_roof', 'cedar_roofing', 'cedar', 'shakeRoof', 'shake');
+  const cedarAmtRaw = getAmt('cedarShakeRoof', 'cedarShake', 'cedar_roof', 'cedar_roofing', 'cedar', 'shakeRoof', 'shake');
+  const cedarAmt = cedarAmtRaw > 0 ? cedarAmtRaw : getEffectiveCedarTotalFromSnapshot();
         const davinciAmt = getAmt('davinciRoof', 'davinci_roof', 'davinci', 'daVinci');
         const vinylAmt = getAmt('vinylRoof', 'vinyl_roof', 'vinyl');
         const clapAmt = getAmt('clapboardRoof', 'clapboard', 'clap_board');
@@ -462,7 +1127,16 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         add('cedar_shake', cedarAmt);
         add('cedar_shake_roof', cedarAmt);
         add('cedar_shake_roofing', cedarAmt);
+        // Explicit canonical tokens to avoid misses
+        if (cedarAmt > 0) {
+          dict.set('{cedar_total}', fmtUsd(cedarAmt));
+          dict.set('{CEDAR_TOTAL}', fmtUsd(cedarAmt));
+        }
         add('davinci', davinciAmt);
+        if (davinciAmt > 0) {
+          dict.set('{davinci_total}', fmtUsd(davinciAmt));
+          dict.set('{DAVINCI_TOTAL}', fmtUsd(davinciAmt));
+        }
         add('vinyl', vinylAmt);
         add('clapboard', clapAmt);
         add('cedar_siding', cedarSidingAmt);
@@ -691,12 +1365,820 @@ export default function ProposalView({ params }: { params: { id: string } }) {
     }
 
     // Run placeholder cleanup early so that amounts exist for pill injection
+  // First, collapse any Word-split tokens into actual $ amounts
+  expandSplitTokens(root);
   replaceKnownPlaceholders(root);
   stripPhotoPlaceholders(root);
   pruneEmptyPlaceholderBlocks(root);
   restoreSkylightLayout(root);
   ensureSkylightInfoRowsFullWidth(root);
   ensureSkylightInfoAcrossTables(root);
+
+  // Fence: Siding totals should only operate inside siding tables
+  (function ensureSidingSectionTotals(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+      for (const tbl of tables) {
+        const ds = (tbl.getAttribute('data-section') || '').toLowerCase();
+        if (!ds.startsWith('siding:')) continue; // only siding
+        // Find TOTAL row and ensure pill is present (leave roofing untouched)
+        const row = Array.from(tbl.querySelectorAll('tr')).find(r => /TOTAL\s+INVESTMENT/i.test(r.textContent || '')) || null;
+        if (!row) continue;
+        const cell = (Array.from(row.querySelectorAll('td,th'))[0] as HTMLTableCellElement | undefined) || undefined;
+        if (!cell) continue;
+        const exists = !!cell.querySelector('label.price-choice');
+        if (!exists) {
+          // Compute from snapshot if needed
+          const sect = ds.replace('siding:', '');
+          let amt = 0;
+          try { const s: any = snapshot || {}; amt = Number(s?.computed?.primaryTotals?.[sect]) || 0; } catch {}
+          if (!(isFinite(amt) && amt > 0)) continue;
+          const lab = document.createElement('label'); lab.className = 'price-choice';
+          const inp = document.createElement('input'); inp.type='checkbox'; inp.className='proposal-price-checkbox'; inp.setAttribute('data-amount', String(amt));
+          const sp = document.createElement('span'); sp.className = 'siding-total-amount'; sp.setAttribute('data-siding-section', sect); sp.setAttribute('data-siding-computed', String(amt)); sp.textContent = fmt(amt);
+          lab.append(inp, sp);
+          // Insert after label text
+          const rx = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i; let inserted=false;
+          const w = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          while (w.nextNode()) { const tn = w.currentNode as Text; const s = tn.textContent || ''; const m = s.match(rx); if (!m) continue; const end = s.search(rx)+m[0].length; const frag=document.createDocumentFragment(); frag.appendChild(document.createTextNode(s.slice(0,end)+' ')); frag.appendChild(lab); const after=s.slice(end).replace(/^\s+/, ' '); if (after) frag.appendChild(document.createTextNode(after)); (tn.parentNode as Node).replaceChild(frag, tn); inserted=true; break; }
+          if (!inserted) cell.appendChild(lab);
+        }
+      }
+    } catch {}
+  })(root);
+
+  // After siding totals render, roofing totals are handled by scoped IIFEs below
+  try { /* roofing totals refreshed by subsequent processors */ } catch {}
+  // Universal roofing TOTAL fixer: scrub $0.00 artifacts and route pills for Asphalt/Davinci
+  (function fixRoofingTotals(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const txt = (tbl.textContent || '').toUpperCase();
+        const isRoofing = /ASPHALT|SHINGLE|NORTHGATE|CLIMATEFLEX|DAVINCI/.test(txt);
+        if (!isRoofing) continue;
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const totalRow = rows.find(r => /TOTAL\s+INVESTMENT/i.test(r.textContent || '')) || null;
+        if (!totalRow) continue;
+        // Remove Word-exported $0.00 trim spans
+        Array.from(totalRow.querySelectorAll('.trim-total-amount')).forEach(el => el.remove());
+        const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLTableCellElement[];
+        const labelCell = (cells[0] || null) as HTMLTableCellElement | null;
+        const gbbCells = Array.from(totalRow.querySelectorAll('td[data-gbb],th[data-gbb]')) as HTMLTableCellElement[];
+        const isDavinci = /DAVINCI/.test(txt);
+        const isAsphalt = /ASPHALT|SHINGLE|NORTHGATE|CLIMATEFLEX/.test(txt);
+        const s: any = snapshot || {};
+        // helpers to place pills right after the label text and scrub any trailing money text
+        const findLabelNode = (cell: HTMLElement | null): Text | null => {
+          if (!cell) return null;
+          const rx = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const tn = walker.currentNode as Text;
+            if (rx.test(tn.textContent || '')) return tn;
+          }
+          return null;
+        };
+        const scrubMoneyAfterLabel = (cell: HTMLElement | null) => {
+          if (!cell) return;
+          const rxLabel = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+          const moneyRe = /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g;
+          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          let seenLabel = false;
+          const edits: Array<{ node: Text; text: string }>=[];
+          const removals: Text[] = [];
+          while (walker.nextNode()) {
+            const tn = walker.currentNode as Text;
+            // Skip any text nodes that live inside a price pill to avoid wiping the pill's own $ text
+            try {
+              let host: Node | null = tn.parentNode;
+              let isInPill = false;
+              while (host) {
+                if (host instanceof HTMLElement && host.matches('label.price-choice')) { isInPill = true; break; }
+                host = host.parentNode;
+              }
+              if (isInPill) continue;
+            } catch {}
+            const txt0 = tn.textContent || '';
+            if (!seenLabel) {
+              if (rxLabel.test(txt0)) {
+                seenLabel = true;
+                // keep label, drop everything after within same node
+                const m = txt0.match(rxLabel);
+                if (m) {
+                  const end = txt0.search(rxLabel) + m[0].length;
+                  const out = (txt0.slice(0, end) + ' ').replace(/\s+$/, ' ');
+                  if (out !== txt0) edits.push({ node: tn, text: out });
+                }
+              }
+              continue;
+            }
+            // after label: remove money-only nodes or strip money fragments
+            if (!/\S/.test(txt0)) { if (txt0) removals.push(tn); continue; }
+            if (moneyRe.test(txt0)) {
+              const cleaned = txt0.replace(moneyRe, '').replace(/\s+/g, ' ').trim();
+              if (!cleaned) removals.push(tn); else edits.push({ node: tn, text: cleaned });
+            }
+          }
+          for (const e of edits) e.node.textContent = e.text;
+          for (const rm of removals) rm.parentNode?.removeChild(rm);
+        };
+        const fmt = (v: number | null | undefined) => {
+          const n = Number(v ?? 0);
+          if (!isFinite(n) || n <= 0) return '';
+          try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); }
+          catch { return `$${(Math.round(n * 100) / 100).toFixed(2)}`; }
+        };
+        const mk = (amt: number | null | undefined) => {
+          const lab = document.createElement('label'); lab.className = 'price-choice';
+          const inp = document.createElement('input'); inp.type = 'checkbox'; inp.className = 'proposal-price-checkbox';
+          if (amt != null) inp.setAttribute('data-amount', String(amt));
+          const sp = document.createElement('span'); sp.textContent = fmt(amt as number);
+          lab.appendChild(inp); lab.appendChild(sp);
+          return lab;
+        };
+        // Davinci: always single inline pill after label
+        if (isDavinci && labelCell) {
+          Array.from(labelCell.querySelectorAll('label.price-choice')).forEach(el => el.remove());
+          // Determine DaVinci amount from snapshot first, else scan table for the max $ value
+          let dv = Number(
+            (s?.computed?.primaryTotals?.davinci) ??
+            (s?.pricing?.davinci?.total) ??
+            (s?.pricing?.davinciBase) ??
+            (s?.pricing?.totals?.davinciBase) ??
+            0
+          );
+          if (!(isFinite(dv) && dv > 0)) {
+            try {
+              const text = (tbl.innerText || '').toString();
+              const rx = /\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/g;
+              let m: RegExpExecArray | null; let max = 0;
+              while ((m = rx.exec(text))) {
+                const val = Number(String(m[1] || '').replace(/,/g, ''));
+                if (isFinite(val) && val > max) max = val;
+              }
+              if (max > 0) dv = max;
+            } catch {}
+          }
+          const pill = mk(dv);
+          // Insert exactly after the TOTAL INVESTMENT label and scrub any money remnants
+          const tn = findLabelNode(labelCell);
+          if (tn) labelCell.insertBefore(pill, tn.nextSibling); else labelCell.appendChild(pill);
+          scrubMoneyAfterLabel(labelCell);
+          continue;
+        }
+        // Asphalt: route to tier cells for multi-cell; else inline triple for collapsed
+        if (isAsphalt) {
+          // Always clear any pill in the label cell before placing GBB pills
+          if (labelCell) Array.from(labelCell.querySelectorAll('label.price-choice')).forEach(el => el.remove());
+          const good = s?.pricing?.asphalt?.good ?? s?.pricing?.roof?.good ?? null;
+          const better = s?.pricing?.asphalt?.better ?? s?.pricing?.roof?.better ?? null;
+          const best = s?.pricing?.asphalt?.best ?? s?.pricing?.roof?.best ?? null;
+          if (gbbCells.length === 3) {
+            const map: Record<string, number | null> = { good, better, best } as any;
+            for (const c of gbbCells) {
+              const k = (c.getAttribute('data-gbb') || '').toLowerCase();
+              Array.from(c.querySelectorAll('label.price-choice')).forEach(el => el.remove());
+              c.appendChild(mk(map[k]));
+            }
+            // Ensure label cell has no leftover pill or money
+            if (labelCell) { Array.from(labelCell.querySelectorAll('label.price-choice')).forEach(el => el.remove()); scrubMoneyAfterLabel(labelCell); }
+          } else if (labelCell) {
+            // Collapsed: place three pills inline right after the label and scrub money
+            const tn = findLabelNode(labelCell);
+            const pills = [good, better, best].map(mk);
+            if (tn) {
+              for (const p of pills) labelCell.insertBefore(p, tn.nextSibling);
+            } else {
+              for (const p of pills) labelCell.appendChild(p);
+            }
+            scrubMoneyAfterLabel(labelCell);
+          }
+        }
+      }
+    } catch {}
+  })(root);
+  // Strip any stray Asphalt authority markers from Cedar roofing TOTAL rows before pill injection
+  (function removeAsphaltAuthorityFromCedarTotals(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const txt = ((tbl.textContent || '').toUpperCase());
+        // Cedar hints, explicitly exclude siding/extras
+        const isCedarRoof = /\bCEDAR\b/.test(txt) && /(ROOF|ROOFING|RIDGE|ICE\s*&\s*WATER|DECK\s+ARMOR|CEDAR\s+BREATHER|PIPE\s+FLASHINGS|COPPER\s+VALLEYS)/.test(txt) && !/\bSIDING\b/.test(txt) && !/WINDOWS\s*&\s*DOORS|SKYLIGHTS|TRIM\s+WORK|DECKING/.test(txt);
+        if (!isCedarRoof) continue;
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+        if (!totalRow) continue;
+        try { (totalRow as HTMLElement).removeAttribute('data-gbb-authority'); } catch {}
+      }
+    } catch {}
+  })(root);
+  // Tag Cedar Roofing tables early to avoid misclassification before pill injection
+  (function ensureCedarRoofingTagged(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const ds = (tbl.getAttribute('data-section') || '').toLowerCase();
+        if (ds.startsWith('roofing:')) continue;
+        const html0 = (tbl.innerHTML || '').toString();
+        const txt = ((tbl.textContent || '').toUpperCase());
+        const hasCedarToken = /\{\s*cedar_total\s*\}/i.test(html0);
+        const looksLikeRoofCedar = /\bCEDAR\b/.test(txt) && /(ROOF|ROOFING|RIDGE|ICE\s*&\s*WATER|DECK\s+ARMOR|CEDAR\s+BREATHER|PIPE\s+FLASHINGS|COPPER\s+VALLEYS)/.test(txt) && !/\bSIDING\b/.test(txt);
+        if (hasCedarToken || looksLikeRoofCedar) {
+          try { tbl.setAttribute('data-section', 'roofing:cedar'); tbl.setAttribute('data-section-type', 'roofing:cedar'); } catch {}
+          // Pre-mark the TOTAL label cell for anchoring
+          try {
+            const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+            const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+            if (totalRow) {
+              const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+              const labelCell = cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || null;
+              if (labelCell) labelCell.setAttribute('data-roofing-total-label', '1');
+              // Remove any stray Asphalt authority markers from Cedar total row
+              try { (totalRow as HTMLElement).removeAttribute('data-gbb-authority'); } catch {}
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+  })(root);
+  // Tag DaVinci Roofing tables early and ensure a pill is present on TOTAL row
+  (function ensureDavinciRoofingTagged(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const ds = (tbl.getAttribute('data-section') || '').toLowerCase();
+        const html0 = (tbl.innerHTML || '').toString();
+        const txt = ((tbl.textContent || '').toUpperCase());
+        const looksDavinci = /\bDAVINCI\b/.test(txt) && !/SIDING/.test(txt);
+        const hasToken = /\{\s*davinci_total\s*\}/i.test(html0);
+        if (!(looksDavinci || hasToken)) continue;
+        try { tbl.setAttribute('data-section', 'roofing:davinci'); tbl.setAttribute('data-section-type', 'roofing:davinci'); } catch {}
+        // Ensure TOTAL row has a pill after label with correct amount
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+        if (!totalRow) continue;
+        const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLTableCellElement[];
+        const labelCell = (cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[0] || null) as HTMLTableCellElement | null;
+        if (!labelCell) continue;
+        const already = labelCell.querySelector('label.price-choice');
+        const hasMoney = /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/.test(labelCell.textContent || '');
+        if (already && hasMoney) continue;
+        // Compute davinci amount
+        let dv = Number(((snapshot as any)?.computed?.primaryTotals?.davinci) || 0);
+        if (!(isFinite(dv) && dv > 0)) dv = Number(((snapshot as any)?.pricing?.davinci?.total) || 0);
+        if (!(isFinite(dv) && dv > 0)) {
+          const text = (tbl.innerText || '').toString();
+          const rx = /\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/g; let m: RegExpExecArray | null; let max = 0;
+          while ((m = rx.exec(text))) { const val = Number(String(m[1] || '').replace(/,/g, '')); if (isFinite(val) && val > max) max = val; }
+          if (max > 0) dv = max;
+        }
+        if (!(isFinite(dv) && dv > 0)) continue;
+        const pill = document.createElement('label'); pill.className = 'price-choice';
+        const inp = document.createElement('input'); inp.type = 'checkbox'; inp.className = 'proposal-price-checkbox'; inp.setAttribute('data-amount', String(dv));
+        const sp = document.createElement('span'); try { sp.textContent = dv.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { sp.textContent = `$${dv}`; }
+        pill.append(inp, sp);
+        // Insert after label text
+        const rxLabel = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+        let inserted = false;
+        const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const tn = walker.currentNode as Text; const s = tn.textContent || '';
+          const m = s.match(rxLabel); if (!m) continue;
+          const end = s.search(rxLabel) + m[0].length;
+          const before = s.slice(0, end), after = s.slice(end).replace(/^\s+/, ' ');
+          const frag = document.createDocumentFragment();
+          frag.appendChild(document.createTextNode(before + ' '));
+          frag.appendChild(pill); if (after) frag.appendChild(document.createTextNode(after));
+          (tn.parentNode as Node).replaceChild(frag, tn); inserted = true; break;
+        }
+        if (!inserted) labelCell.appendChild(pill);
+      }
+    } catch {}
+  })(root);
+  // Disable global TOTAL-row rewrites that have caused cross-interference across roofing sections
+  // ensureRoofingTotalPills(root);
+  // normalizeRoofingTotalInline(root);
+  // Roofing: synthesize TOTAL INVESTMENT row with inline pill when table lacks it (Cedar/Davinci only)
+  (function ensureRoofingTotalRow(container: HTMLElement){
+    try {
+      const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+      const mkPill = (amt: number) => { const lab = document.createElement('label'); lab.className = 'price-choice'; const inp = document.createElement('input'); inp.type='checkbox'; inp.className='proposal-price-checkbox'; inp.setAttribute('data-amount', String(amt)); const sp=document.createElement('span'); sp.textContent=fmt(amt); lab.append(inp, sp); return lab; };
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const txt = ((tbl.textContent || '').toUpperCase());
+        const isCedarRoof = /\bCEDAR\b/.test(txt) && !/SIDING/.test(txt);
+        const isDavinciRoof = /\bDAVINCI\b/.test(txt) && !/SIDING/.test(txt);
+        if (!isCedarRoof && !isDavinciRoof) continue;
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        let totalRow = rows.find(r => /TOTAL\s+INVESTMENT/i.test(r.textContent || '')) || null;
+        if (!totalRow) {
+          // If the template provides an empty last row, use it
+          const lastEmpty = rows.slice().reverse().find(r => {
+            const txt = (r.textContent || '').trim();
+            const cells = Array.from(r.querySelectorAll('td,th')) as HTMLTableCellElement[];
+            return !txt && (cells.length <= 2);
+          }) || null;
+          const tr = lastEmpty || document.createElement('tr');
+          // ensure it has two cells
+          let cells = Array.from(tr.querySelectorAll('td,th')) as HTMLTableCellElement[];
+          while (cells.length < 2) { const td = document.createElement('td'); tr.appendChild(td); cells = Array.from(tr.querySelectorAll('td,th')) as HTMLTableCellElement[]; }
+          const tdLabel = cells[0]; const tdAmt = cells[1];
+          tdLabel.style.textAlign='center'; tdAmt.style.textAlign='center';
+          tdLabel.innerHTML = '<b><u><span style="font-size:11pt;font-family:Times New Roman,serif">TOTAL Investment <o:p></o:p></span></u></b><b><span style="font-size:11pt">:</span></b>';
+          if (!lastEmpty) (tbl.querySelector('tbody') || tbl).appendChild(tr);
+          totalRow = tr;
+        }
+        const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLTableCellElement[];
+        const labelCell = (cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[0] || null) as HTMLTableCellElement | null;
+        if (!labelCell) continue;
+        // compute amount
+        let amt = 0;
+        if (isCedarRoof) {
+          amt = Number(((snapshot as any)?.computed?.primaryTotals?.cedar) || 0);
+          if (!(isFinite(amt) && amt > 0)) amt = Number(((snapshot as any)?.pricing?.cedar?.total) || 0);
+        } else if (isDavinciRoof) {
+          amt = Number(((snapshot as any)?.computed?.primaryTotals?.davinci) || 0);
+          if (!(isFinite(amt) && amt > 0)) amt = Number(((snapshot as any)?.pricing?.davinci?.total) || 0);
+        }
+        if (!(isFinite(amt) && amt > 0)) {
+          // fallback: take max $ in table text
+          const rx = /\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/g; let m: RegExpExecArray | null; let max = 0; const text = (tbl.innerText || '').toString();
+          while ((m = rx.exec(text))) { const v = Number(String(m[1]).replace(/,/g, '')); if (isFinite(v) && v > max) max = v; }
+          if (max > 0) amt = max;
+        }
+        if (!(isFinite(amt) && amt > 0)) continue;
+        // insert pill after label
+        Array.from(labelCell.querySelectorAll('label.price-choice')).forEach(el => el.remove());
+        const pill = mkPill(amt);
+        const rxLabel = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i; let inserted = false; const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) { const tn = walker.currentNode as Text; const s = tn.textContent || ''; const m = s.match(rxLabel); if (!m) continue; const end = s.search(rxLabel) + m[0].length; const frag = document.createDocumentFragment(); frag.appendChild(document.createTextNode(s.slice(0,end) + ' ')); frag.appendChild(pill); const after = s.slice(end).replace(/^\s+/, ' '); if (after) frag.appendChild(document.createTextNode(after)); (tn.parentNode as Node).replaceChild(frag, tn); inserted = true; break; }
+        if (!inserted) labelCell.appendChild(pill);
+      }
+    } catch {}
+  })(root);
+  // Roofing: ensure inline pill after any TOTAL INVESTMENT label within cedar/davinci tables (handles non-row placements)
+  (function ensureInlineTotalPill(container: HTMLElement){
+    try {
+      const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+      const mkPill = (amt: number) => { const lab = document.createElement('label'); lab.className = 'price-choice'; const inp = document.createElement('input'); inp.type='checkbox'; inp.className='proposal-price-checkbox'; inp.setAttribute('data-amount', String(amt)); const sp=document.createElement('span'); sp.textContent=fmt(amt); lab.append(inp, sp); return lab; };
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const ds = (tbl.getAttribute('data-section') || '').toLowerCase();
+        const isCedarRoof = ds.includes('roofing:cedar');
+        const isDavinciRoof = ds.includes('roofing:davinci');
+        if (!isCedarRoof && !isDavinciRoof) continue;
+        // compute amount once per table
+        let amt = 0;
+        if (isCedarRoof) {
+          amt = Number(((snapshot as any)?.computed?.primaryTotals?.cedar) || 0);
+          if (!(isFinite(amt) && amt > 0)) amt = Number(((snapshot as any)?.pricing?.cedar?.total) || 0);
+        } else if (isDavinciRoof) {
+          amt = Number(((snapshot as any)?.computed?.primaryTotals?.davinci) || 0);
+          if (!(isFinite(amt) && amt > 0)) amt = Number(((snapshot as any)?.pricing?.davinci?.total) || 0);
+        }
+        if (!(isFinite(amt) && amt > 0)) continue;
+        const pill = mkPill(amt);
+        // find the element containing the TOTAL INVESTMENT label
+        // Prefer anchoring directly to token occurrences within the table
+        const tokenName = isCedarRoof ? 'cedar_total' : 'davinci_total';
+        const tokenRe = new RegExp(`\\{\\s*${tokenName}\\s*\\}`, 'i');
+        const elements = Array.from(tbl.querySelectorAll('td,th,p,div,span,b,strong,u,i,em')) as HTMLElement[];
+        let target: HTMLElement | null = null;
+        // First, look for Word-split tokens like <span class="SpellE">cedar_total</span>
+        const spellToken = tbl.querySelector(`span.SpellE`) as HTMLElement | null;
+        if (spellToken && (spellToken.textContent || '').toLowerCase().includes(tokenName)) {
+          target = (spellToken.closest('p,td,th,div,span') as HTMLElement | null) || spellToken;
+        }
+        // Next, plain token text
+        if (!target) {
+          for (const el of elements) { if (tokenRe.test(el.textContent || '')) { target = el; break; } }
+        }
+        // Fallback to TOTAL INVESTMENT label
+        if (!target) {
+          const re = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+          const candidates = elements.filter(el => re.test(el.textContent || ''));
+          target = candidates.find(el => !Array.from(el.querySelectorAll('*')).some(ch => re.test((ch as HTMLElement).textContent || ''))) || candidates[0] || null;
+        }
+        // avoid duplication
+        if (target.querySelector('label.price-choice')) continue;
+        // anchor before <o:p> if present
+        let inserted = false;
+        try {
+          const o = target.querySelector('o\\:p') as Element | null;
+          if (o && o.parentNode) { o.parentNode.insertBefore(pill, o); inserted = true; }
+        } catch {}
+        if (inserted) continue;
+        // else insert immediately before the token text node
+        const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const tn = walker.currentNode as Text; const s = tn.textContent || ''; if (!tokenRe.test(s)) continue;
+          const out = s.replace(tokenRe, '').replace(/^\s+/, ' ');
+          const parent = tn.parentNode as Node; const frag = document.createDocumentFragment();
+          frag.appendChild(pill);
+          if (out) frag.appendChild(document.createTextNode(out));
+          parent.replaceChild(frag, tn); inserted = true; break;
+        }
+        if (!inserted) target.appendChild(pill);
+      }
+    } catch {}
+  })(root);
+  // Cedar-only safety net: if a TOTAL label exists in any table that mentions Cedar (but not Siding),
+  // and the TOTAL row has no pill or $ amount, inject from snapshot/table — regardless of prior tagging.
+  (function ensureCedarTotalByLabel(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+      const moneyIn = (el: HTMLElement) => /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/.test(el.textContent || '');
+      const getSnapCedar = (): number => { try { return Number((snapshot as any)?.computed?.primaryTotals?.cedar || 0) || 0; } catch { return 0; } };
+      for (const tbl of tables) {
+        const text = ((tbl.textContent || '').replace(/\s+/g, ' ')).toUpperCase();
+        if (!/CEDAR/.test(text)) continue;
+        if (/SIDING/.test(text)) continue; // avoid Cedar Siding
+        if (/WINDOWS\s*&\s*DOORS|SKYLIGHTS|TRIM\s+WORK|DECKING/.test(text)) continue; // avoid extras
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+        if (!totalRow) continue;
+        // Skip if row already contains a pill or a visible money amount
+        if (totalRow.querySelector('label.price-choice') || moneyIn(totalRow as any)) continue;
+        // Derive amount: prefer snapshot cedar, else max $ in table
+        let amt = getSnapCedar();
+        if (!(amt > 0)) {
+          const moneyRe = /\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/g;
+          const matches = ((tbl.innerText || '').match(moneyRe) || []).map(s => Number((s || '').replace(/[^0-9.\-]/g, '').replace(/,/g, ''))).filter(v => isFinite(v) && v > 0);
+          if (matches.length) amt = Math.max(...matches);
+        }
+        if (!(amt > 0)) {
+          amt = getEffectiveCedarTotalFromSnapshot();
+        }
+        if (!(amt > 0)) continue;
+        // Insert pill immediately after the label text within the label cell or last cell
+        const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+        const labelCell = (cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[cells.length - 1]) as HTMLElement;
+        const pill = document.createElement('label'); pill.className = 'price-choice';
+        const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; input.setAttribute('data-amount', String(amt));
+        const span = document.createElement('span'); span.textContent = fmt(amt);
+        pill.appendChild(input); pill.appendChild(span);
+        // Try to place inline after the label text
+        let inserted = false;
+        try {
+          const labelRe = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+          const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const tn = walker.currentNode as Text;
+            const s = tn.textContent || '';
+            const m = s.match(labelRe);
+            if (!m) continue;
+            const end = s.search(labelRe) + m[0].length;
+            const before = s.slice(0, end);
+            const after = s.slice(end).replace(/^\s+/, ' ');
+            const frag = document.createDocumentFragment();
+            frag.appendChild(document.createTextNode(before + ' '));
+            frag.appendChild(pill);
+            if (after) frag.appendChild(document.createTextNode(after));
+            (tn.parentNode as Node).replaceChild(frag, tn);
+            inserted = true;
+            break;
+          }
+        } catch {}
+        if (!inserted) { try { labelCell.appendChild(document.createTextNode(' ')); } catch {}; labelCell.appendChild(pill); }
+        try { (tbl as HTMLElement).setAttribute('data-cedar-fallback-pill', '1'); } catch {}
+      }
+    } catch {}
+  })(root);
+  // Final fallback: if Cedar Roofing still lacks a pill in total row, append a centered pill after the table
+  (function ensureCedarRoofingFallbackPill(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table[data-section="roofing:cedar"], table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const ds = (tbl.getAttribute('data-section') || '').toLowerCase();
+        const txt = (tbl.textContent || '').toUpperCase();
+        const isCedarRoof = ds === 'roofing:cedar' || (/\bCEDAR\b/.test(txt) && /(ROOF|ROOFING|RIDGE|ICE\s*&\s*WATER|DECK\s+ARMOR|CEDAR\s+BREATHER|PIPE\s+FLASHINGS|COPPER\s+VALLEYS)/.test(txt) && !/\bSIDING\b/.test(txt));
+        if (!isCedarRoof) continue;
+        // If a pill already exists in this table's TOTAL row or we already appended fallback, skip
+        if (tbl.querySelector('tr label.price-choice') || tbl.getAttribute('data-cedar-fallback-pill') === '1') continue;
+        // Compute amount from table or snapshot
+        const moneyRe = /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g;
+        const amounts = ((tbl.innerText || '').match(moneyRe) || []).map(s => Number(s.replace(/[^0-9.\-]/g, '').replace(/,/g, ''))).filter(v => isFinite(v) && v > 0);
+  let amt = amounts.length ? Math.max(...amounts) : 0;
+  if (!(amt > 0)) { try { amt = Number((snapshot as any)?.computed?.primaryTotals?.cedar || 0) || 0; } catch { amt = 0; } }
+  if (!(amt > 0)) { try { amt = getEffectiveCedarTotalFromSnapshot(); } catch { /* noop */ } }
+        if (!(amt > 0)) continue;
+        // Build a centered pill paragraph under the table
+        const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+        const p = document.createElement('p');
+        p.setAttribute('data-cedar-fallback-pill', '1');
+        p.style.textAlign = 'center';
+        p.style.margin = '8px 0 6px 0';
+        // Build label + pill
+        const strong = document.createElement('strong');
+        strong.style.fontSize = '1.2em';
+        strong.textContent = 'TOTAL INVESTMENT:';
+        const label = document.createElement('label');
+        label.className = 'price-choice';
+        label.style.marginLeft = '8px';
+        const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; input.setAttribute('data-amount', String(amt));
+        const span = document.createElement('span'); span.textContent = fmt(amt);
+        label.appendChild(input); label.appendChild(span);
+        p.appendChild(strong); p.appendChild(document.createTextNode(' ')); p.appendChild(label);
+        // Insert after the table element
+        if (tbl.parentNode) {
+          if (tbl.nextSibling) tbl.parentNode.insertBefore(p, tbl.nextSibling);
+          else tbl.parentNode.appendChild(p);
+          tbl.setAttribute('data-cedar-fallback-pill', '1');
+        }
+      }
+    } catch {}
+  })(root);
+  // Restore specific NorthGate/ClimateFlex GBB pills if they collapsed
+  ensureNorthGateGBBPill(root);
+  // Ensure Asphalt G/B/B pills render in the correct cells (Good, Better, Best), not in the TOTAL label cell
+  ensureAsphaltGBBPlacement(root);
+  // Ensure base roofing TOTAL pills are present across Asphalt/Cedar/DaVinci/Rubber before any gating
+  try { ensureRoofingTotalPills(root); } catch {}
+  // Post normalize: move primary pill inline after label for non-GBB roofing tables and scrub trailing money artifacts
+  try { normalizeRoofingTotalInline(root); } catch {}
+  // Remove stray single-cell TOTAL INVESTMENT label-only rows in Asphalt tables (no price cells)
+  (function removeStrayAsphaltTotalLabelRows(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const txt = (tbl.textContent || '').toUpperCase();
+        const isAsphalt = /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txt) || (String(tbl.getAttribute('data-section')||'').toLowerCase() === 'roofing:asphalt');
+        if (!isAsphalt) continue;
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        for (const r of rows) {
+          const cells = Array.from(r.querySelectorAll('td,th')) as HTMLTableCellElement[];
+          const labelCell = cells[0];
+          const isTotalLabelOnly = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test((labelCell?.textContent||'')) && cells.length === 1 && ((labelCell?.colSpan||1) >= 3);
+          const hasGBBCells = !!r.querySelector('[data-gbb]');
+          if (isTotalLabelOnly && !hasGBBCells) {
+            // Transform this collapsed label row into a full GBB row with pills
+            try {
+              const s: any = snapshot || {};
+              const pr: any = (s.pricing || {}).asphalt || (s.pricing || {}).roof || {};
+              const snapGood = Number(pr?.good || pr?.northgateGood || pr?.climateflexGood || 0) || 0;
+              const snapBetter = Number(pr?.better || pr?.northgateBetter || pr?.climateflexBetter || 0) || 0;
+              const snapBest = Number(pr?.best || pr?.northgateBest || pr?.climateflexBest || 0) || 0;
+              const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+              const mk = (n: number, cls: string) => {
+                const pill = document.createElement('label'); pill.className = `price-choice gbb ${cls}`;
+                const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; if (n>0) input.setAttribute('data-amount', String(n));
+                const span = document.createElement('span'); span.textContent = n>0 ? fmt(n) : '';
+                pill.appendChild(input); pill.appendChild(span);
+                return pill;
+              };
+              // Build four cells: label + good/better/best
+              const newRow = document.createElement('tr');
+              const tdLabel = document.createElement('td');
+              // Intentionally leave the first cell blank to remove the "TOTAL INVESTMENT:" text per request
+              tdLabel.textContent = '';
+              tdLabel.style.fontWeight = '';
+              const tdGood = document.createElement('td'); tdGood.setAttribute('data-gbb','good'); tdGood.style.textAlign = 'center';
+              const tdBetter = document.createElement('td'); tdBetter.setAttribute('data-gbb','better'); tdBetter.style.textAlign = 'center';
+              const tdBest = document.createElement('td'); tdBest.setAttribute('data-gbb','best'); tdBest.style.textAlign = 'center';
+              tdGood.appendChild(mk(snapGood, 'tier-good'));
+              tdBetter.appendChild(mk(snapBetter, 'tier-better'));
+              tdBest.appendChild(mk(snapBest, 'tier-best'));
+              newRow.appendChild(tdLabel);
+              newRow.appendChild(tdGood);
+              newRow.appendChild(tdBetter);
+              newRow.appendChild(tdBest);
+              // Replace existing collapsed row
+              r.replaceWith(newRow);
+            } catch { /* fallback: if transform fails, keep row */ }
+          }
+        }
+      }
+    } catch {}
+  })(root);
+  // Ensure prompt rows and any hidden rows are visible in Asphalt sections
+  (function showSelectionPromptAndUnhideAsphaltRows(container: HTMLElement){
+    try {
+      // Inject a strong visibility rule once
+      const styleId = 'asphalt-prompt-force-visible';
+      if (!document.getElementById(styleId)) {
+        const st = document.createElement('style');
+        st.id = styleId;
+        st.textContent = `
+          table[data-section="roofing:asphalt"] tr[data-force-visible] { display: table-row !important; }
+        `;
+        document.head.appendChild(st);
+      }
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const txt = (tbl.textContent || '').toUpperCase();
+        const isAsphalt = /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txt) || (String(tbl.getAttribute('data-section')||'').toLowerCase() === 'roofing:asphalt');
+        if (!isAsphalt) continue;
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        for (const r of rows) {
+          const t = (r.textContent || '').toUpperCase();
+          // Unhide any row in Asphalt tables
+          (r as HTMLElement).style.removeProperty?.('display');
+          // Explicitly unhide prompt variants
+          if (/PLEASE\s+MAKE\s+SELECTION/.test(t) || /PLEASE\s+CHECK\s+SELECTION/.test(t)) {
+            (r as HTMLElement).setAttribute('data-force-visible', '1');
+          }
+        }
+      }
+    } catch {}
+  })(root);
+  // Targeted cleanup: In Asphalt GBB TOTAL rows, remove any pill in the label cell and trim artifacts
+  (function removeLabelPillInAsphaltGBB(container: HTMLElement){
+    try {
+      const tables = Array.from(container.querySelectorAll('table')) as HTMLTableElement[];
+      for (const tbl of tables) {
+        const txt = (tbl.textContent || '').toUpperCase();
+        const isAsphalt = /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txt) || (String(tbl.getAttribute('data-section')||'').toLowerCase() === 'roofing:asphalt');
+        if (!isAsphalt) continue;
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+        if (!totalRow) continue;
+        const hasGBB = /GOOD|BETTER|BEST/i.test(totalRow.textContent || '') || Array.from(totalRow.querySelectorAll('[data-gbb]')).length > 0;
+        if (!hasGBB) continue;
+        const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+        const labelCell = (cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[0]) as HTMLElement;
+        // Remove any pill in the label cell
+        Array.from(labelCell.querySelectorAll('label.price-choice')).forEach(el => (el as HTMLElement).remove());
+        // Strip $0.00 trim spans and bare currency artifacts in label cell
+        Array.from(labelCell.querySelectorAll('.trim-total-amount,.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
+        const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+        const edits: Text[] = [];
+        while (walker.nextNode()) {
+          const tn = walker.currentNode as Text;
+          const s0 = tn.textContent || '';
+          const s1 = s0.replace(/\$\s*0(?:\.00)?/g, '').replace(/\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g, '');
+          if (s1 !== s0) tn.textContent = s1;
+          if (!/\S/.test(tn.textContent || '')) edits.push(tn);
+        }
+        edits.forEach(n => n.parentNode?.removeChild(n));
+      }
+    } catch {}
+  })(root);
+
+  // Final brute-force cleanup: For any TOTAL row that contains GBB tier cells, remove pills from the first cell
+  (function removeLabelPillInGBBRows(container: HTMLElement){
+    try {
+      const rows = Array.from(container.querySelectorAll('tr')) as HTMLTableRowElement[];
+      for (const r of rows) {
+        const t = (r.textContent || '').toUpperCase();
+        if (!/TOTAL\s+INVESTMENT/.test(t)) continue;
+        const gbbCells = Array.from(r.querySelectorAll('[data-gbb]')) as HTMLElement[];
+        if (!gbbCells.length) continue;
+        const cells = Array.from(r.querySelectorAll('td,th')) as HTMLElement[];
+        const labelCell = (cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[0]) as HTMLElement;
+        Array.from(labelCell.querySelectorAll('label.price-choice')).forEach(el => (el as HTMLElement).remove());
+        Array.from(labelCell.querySelectorAll('.trim-total-amount,.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
+        const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+        const edits: Text[] = [];
+        while (walker.nextNode()) {
+          const tn = walker.currentNode as Text;
+          const s0 = tn.textContent || '';
+          const s1 = s0.replace(/\$\s*0(?:\.00)?/g, '').replace(/\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g, '');
+          if (s1 !== s0) tn.textContent = s1;
+          if (!/\S/.test(tn.textContent || '')) edits.push(tn);
+        }
+        edits.forEach(n => n.parentNode?.removeChild(n));
+      }
+    } catch {}
+  })(root);
+  // Collapsed Asphalt TOTAL row fixer: inject three inline pills after the label if row has a single colSpan cell
+  try {
+    const tables = Array.from(root.querySelectorAll('table')) as HTMLTableElement[];
+    for (const tbl of tables) {
+      const txt = (tbl.textContent || '').toUpperCase();
+      if (!/(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txt)) continue;
+      const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+      const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+      if (!totalRow) continue;
+      const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLTableCellElement[];
+      const labelCell = cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[0];
+      const colSpan = Number((labelCell as HTMLTableCellElement).colSpan || 1);
+      if (cells.length === 1 && colSpan >= 3) {
+        // If any pills already present, skip
+        if (labelCell.querySelector('label.price-choice')) continue;
+        const s: any = snapshot || {};
+        const pr: any = (s.pricing || {}).asphalt || (s.pricing || {}).roof || {};
+        const snapGood = Number(pr?.good || pr?.northgateGood || pr?.climateflexGood || 0) || 0;
+        const snapBetter = Number(pr?.better || pr?.northgateBetter || pr?.climateflexBetter || 0) || 0;
+        const snapBest = Number(pr?.best || pr?.northgateBest || pr?.climateflexBest || 0) || 0;
+        const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+        const mk = (n: number, cls: string) => {
+          const pill = document.createElement('label'); pill.className = `price-choice gbb ${cls}`;
+          const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; if (n>0) input.setAttribute('data-amount', String(n));
+          const span = document.createElement('span'); span.textContent = n>0 ? fmt(n) : '';
+          pill.appendChild(input); pill.appendChild(span);
+          return pill;
+        };
+        const pills = [mk(snapGood, 'tier-good'), mk(snapBetter, 'tier-better'), mk(snapBest, 'tier-best')];
+        // Insert inline after label text
+        const labelRe = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+        let inserted = false;
+        try {
+          const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const tn = walker.currentNode as Text;
+            const s0 = tn.textContent || '';
+            const m = s0.match(labelRe);
+            if (!m) continue;
+            const idx = s0.search(labelRe) + m[0].length;
+            const before = s0.slice(0, idx);
+            const after = s0.slice(idx).replace(/^\s+/, ' ');
+            const frag = document.createDocumentFragment();
+            frag.appendChild(document.createTextNode(before + ' '));
+            for (const p of pills) { frag.appendChild(p); frag.appendChild(document.createTextNode(' ')); }
+            if (after) frag.appendChild(document.createTextNode(after));
+            (tn.parentNode as Node).replaceChild(frag, tn);
+            inserted = true;
+            break;
+          }
+        } catch {}
+        if (!inserted) {
+          labelCell.appendChild(document.createTextNode(' '));
+          for (const p of pills) { labelCell.appendChild(p); labelCell.appendChild(document.createTextNode(' ')); }
+        }
+      }
+    }
+  } catch {}
+  // Strong visibility fallback: create pills in roofing TOTAL rows even if earlier passes missed
+  try {
+    (function ensureRoofingTotalsVisible(){
+      try {
+        const tables = Array.from(root.querySelectorAll('table')) as HTMLElement[];
+        const roofingTables = tables.filter(t => {
+          const txt = (t.textContent || '').toUpperCase();
+          const ds = String(t.getAttribute('data-section') || '').toLowerCase();
+          return (ds.startsWith('roofing:') || /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX|DAVINCI|CEDAR\s+SHAKE\s+ROOF(ING)?|RUBBER\s+ROOF(ING)?)/.test(txt));
+        }).filter(t => (t as HTMLElement).style.display !== 'none');
+        for (const tbl of roofingTables) {
+          const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+          const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*:?/i.test(r.textContent || '')) || null;
+          if (!totalRow) continue;
+          // Skip Asphalt GBB tables entirely here to avoid injecting a label-cell pill
+          const txtTbl = (tbl.textContent || '').toUpperCase();
+          const hasGBB = /GOOD|BETTER|BEST/.test(totalRow.textContent || '') || Array.from(totalRow.querySelectorAll('[data-gbb]')).length > 0;
+          const isAsphalt = /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txtTbl) || (String(tbl.getAttribute('data-section')||'').toLowerCase() === 'roofing:asphalt');
+          if (isAsphalt && hasGBB) continue;
+          const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+          // Skip if any pill exists already
+          if (cells.some(c => c.querySelector('label.price-choice'))) continue;
+          const ds = String(tbl.getAttribute('data-section') || '').toLowerCase();
+          const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+          // Compute amount from snapshot per type; fallback to max table currency
+          const txt = (tbl.textContent || '').toUpperCase();
+          const s: any = snapshot || {};
+          const prim: any = (s.computed || {}).primaryTotals || {};
+          let amt = 0;
+          if (ds === 'roofing:asphalt' || /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txt)) {
+            // Prefer overall asphalt total if present, otherwise max table amount
+            amt = Number(prim.asphalt || 0) || 0;
+          } else if (ds === 'roofing:davinci' || /DAVINCI/.test(txt)) {
+            amt = Number(prim.davinci || 0) || 0;
+          } else if (ds === 'roofing:cedar' || /CEDAR\s+SHAKE\s+ROOF(ING)?/.test(txt)) {
+            amt = Number(prim.cedar || 0) || 0;
+          } else if (ds === 'roofing:rubber' || /RUBBER\s+ROOF(ING)?/.test(txt)) {
+            amt = Number(prim.rubber || 0) || 0;
+          }
+          if (!(amt > 0)) {
+            const moneyRe = /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g;
+            const parsed = ((tbl.innerText || '').match(moneyRe) || []).map(s => Number((s || '').replace(/[^0-9.\-]/g, '').replace(/,/g, ''))).filter(v => isFinite(v) && v > 0);
+            amt = parsed.length ? Math.max(...parsed) : 0;
+          }
+          if (!(amt > 0)) continue;
+          const labelCell = (cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[cells.length - 1]) as HTMLElement;
+          const wrap = document.createElement('label'); wrap.className = 'price-choice';
+          const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; input.setAttribute('data-amount', String(amt));
+          const span = document.createElement('span'); span.textContent = fmt(amt);
+          wrap.appendChild(input); wrap.appendChild(span);
+          // Insert immediately after label text
+          const labelRe = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+          let inserted = false;
+          try {
+            const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const tn = walker.currentNode as Text;
+              const s0 = tn.textContent || '';
+              const m = s0.match(labelRe);
+              if (!m) continue;
+              const idx = s0.search(labelRe) + m[0].length;
+              const before = s0.slice(0, idx);
+              const after = s0.slice(idx).replace(/^\s+/, ' ');
+              const frag = document.createDocumentFragment();
+              frag.appendChild(document.createTextNode(before + ' '));
+              frag.appendChild(wrap);
+              if (after) frag.appendChild(document.createTextNode(after));
+              (tn.parentNode as Node).replaceChild(frag, tn);
+              inserted = true;
+              break;
+            }
+          } catch {}
+          if (!inserted) { labelCell.appendChild(document.createTextNode(' ')); labelCell.appendChild(wrap); }
+        }
+      } catch {}
+    })();
+  } catch {}
 
     // Utility: parse money amount from string like "$ 3,600.00"
     function parseMoney(text: string): number {
@@ -1212,16 +2694,22 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         const detectKey = (tbl: HTMLElement): Key | null => {
           const text = T(tbl);
           const first = firstCellText(tbl);
+          const html = (tbl.innerHTML || '').toString();
+          const hasCedarRoofToken = /\{\s*cedar_total\s*\}/i.test(html);
+          const hasSidingTotalToken = /\{\s*siding_total\s*\}/i.test(html);
+          // Token-first detection to avoid cross-tag collisions
+          if (hasCedarRoofToken) return 'roofing:cedar';
+          if (hasSidingTotalToken && /\bSIDING\b/.test(text)) return 'siding:cedar';
           // Roofing
           if (/(CEDAR\s+SHAKE\s+ROOFING)/.test(text) || /^CEDAR(\s+SHAKE)?(\s+ROOF(ING)?)?$/.test(first)) return 'roofing:cedar';
           if (/(DAVINCI)/.test(text) || /^DAVINCI(\s+ROOF(ING)?)?$/.test(first)) return 'roofing:davinci';
           if (/(RUBBER\s+ROOF(ING)?)/.test(text) || /^RUBBER(\s+ROOF(ING)?)?$/.test(first)) return 'roofing:rubber';
           if (/(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(text)) return 'roofing:asphalt';
-          // Siding
-          if (/CEDAR\s+SHAKE(\s+SIDING)?/.test(text) || /^CEDAR(\s+SHAKE)?$/i.test(first)) return 'siding:cedar';
-          if (/SYNTHETIC(\s+SIDING)?/.test(text)) return 'siding:synthetic';
-          if (/VINYL(\s+SIDING)?/.test(text)) return 'siding:vinyl';
-          if (/(CLAP\s*BOARD|CLAPBOARD)(\s+SIDING)?/.test(text)) return 'siding:clapboard';
+          // Siding (require explicit "SIDING" to avoid misclassifying roofing tables)
+          if (/CEDAR\s+SHAKE\s+SIDING\b/i.test(text)) return 'siding:cedar';
+          if (/\bSYNTHETIC\s+SIDING\b/i.test(text)) return 'siding:synthetic';
+          if (/\bVINYL\s+SIDING\b/i.test(text)) return 'siding:vinyl';
+          if (/(\bCLAP\s*BOARD\b|\bCLAPBOARD\b)\s+SIDING\b/i.test(text)) return 'siding:clapboard';
           // Decking
           if (/^DECKING$/.test(first) || /\bDECKING\b/.test(text)) return 'decking';
           // Extras
@@ -1236,24 +2724,13 @@ export default function ProposalView({ params }: { params: { id: string } }) {
           return null;
         };
         const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
-        // Helper: detect whether a table already contains priced data (positive $ amounts or price pills)
-        const hasPricedData = (tbl: HTMLElement): boolean => {
-          // Any existing price-choice labels or proposal-price-checkbox inputs
-          const pills = tbl.querySelector('label.price-choice');
-          const inputs = tbl.querySelector('input.proposal-price-checkbox');
-          if (pills || inputs) return true;
-          // Look for a positive dollar amount in text content
-          const txt = (tbl.textContent || '');
-          const m = txt.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/);
-          if (m) {
-            const n = Number((m[1] || '').replace(/[^0-9.\-]/g, ''));
-            if (isFinite(n) && n > 0) return true;
-          }
-          return false;
-        };
         for (const tbl of tables) {
           if (isLegalOrSignature(tbl)) continue;
-          const key = detectKey(tbl);
+          // Freeze cedar roofing tag if token is present
+          const html0 = (tbl.innerHTML || '').toString();
+          const cedarToken = /\{\s*cedar_total\s*\}/i.test(html0);
+          const existing = (tbl.getAttribute('data-section') || '').toLowerCase();
+          const key = cedarToken ? 'roofing:cedar' : detectKey(tbl);
           if (!key) continue;
           // Mark section root so enhancements are scoped per-section
           try { (tbl as HTMLElement).setAttribute('data-section', key); } catch {}
@@ -1266,15 +2743,31 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             }
           } catch {}
           let show: boolean | null = null;
-          const hasPrice = sectionHasPrice(tbl as HTMLElement);
+          const hasPrice = (function(){
+            // Treat cedar roofing table as having price when `{cedar_total}` token exists or any $ amount is present
+            try {
+              const html = (tbl.innerHTML || '').toString();
+              if (/\{\s*cedar_total\s*\}/i.test(html)) return true;
+            } catch {}
+            return sectionHasPrice(tbl as HTMLElement);
+          })();
           if (key.startsWith('roofing:')) {
-            if (workSel.roofing === false) show = hasPrice ? true : false;
-            else if (workSel.roofing === true) {
-              const sub = key.split(':')[1];
-              const subSel = roofingSel[sub];
-              if (subSel === true) show = true; else if (subSel === false) show = hasPrice ? true : false; else show = null;
-            } else if (hasPrice) {
+            // Never hide Asphalt (or any roofing table) solely because other domains aren't selected.
+            // If the table has a price signal or explicit GBB headers, force it visible.
+            const txtTbl = T(tbl);
+            const hasGBB = /GOOD|BETTER|BEST/.test(txtTbl) || !!tbl.querySelector('[data-gbb]');
+            const isAsphaltSection = key === 'roofing:asphalt' || /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txtTbl);
+            if (isAsphaltSection && (hasPrice || hasGBB)) {
               show = true;
+            } else {
+              if (workSel.roofing === false) show = hasPrice ? true : false;
+              else if (workSel.roofing === true) {
+                const sub = key.split(':')[1];
+                const subSel = roofingSel[sub];
+                if (subSel === true) show = true; else if (subSel === false) show = hasPrice ? true : false; else show = null;
+              } else if (hasPrice) {
+                show = true;
+              }
             }
           } else if (key.startsWith('siding:')) {
             if (workSel.siding === false) show = hasPrice ? true : false;
@@ -1297,10 +2790,6 @@ export default function ProposalView({ params }: { params: { id: string } }) {
             const flag = extrasSel[sub as keyof typeof extrasSel];
             // Strict per-section gating for all extras (no special cases)
             show = (flag === true) ? true : (flag === false ? false : null);
-          }
-          // Override: keep sections visible if they already contain priced data to prevent hiding pills/totals
-          if (show === false && hasPricedData(tbl)) {
-            show = true;
           }
           if (show === true || show === false) {
             (tbl as HTMLElement).style.display = show ? '' : 'none';
@@ -1364,6 +2853,133 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       const sections = Array.from(container.querySelectorAll('table[data-section]')) as HTMLElement[];
       for (const tbl of sections) {
         const key = String(tbl.getAttribute('data-section') || '');
+
+          // Cedar enforcement: strip cross-gating attributes and ensure TOTAL pill exists
+          (function enforceCedarRoofingTotals(){
+            try {
+              const root = containerRef.current as HTMLElement | null; if (!root) return;
+              const cedarTables = Array.from(root.querySelectorAll('table[data-section="roofing:cedar"]')) as HTMLTableElement[];
+              cedarTables.forEach((tbl) => {
+                // Remove asphalt authority from TOTAL rows under cedar
+                const totalRow = Array.from(tbl.querySelectorAll('tr')).find(tr => /TOTAL\s+INVESTMENT/i.test((tr.textContent||'')) ) as HTMLTableRowElement | undefined;
+                if (totalRow) {
+                  if (totalRow.hasAttribute('data-gbb-authority')) totalRow.removeAttribute('data-gbb-authority');
+                  Array.from(totalRow.querySelectorAll('[data-gbb-authority]')).forEach(n => n.removeAttribute('data-gbb-authority'));
+                  // If no pill present, insert one with computed amount
+                  const hasPill = !!totalRow.querySelector('.price-pill, label.price-choice');
+                  if (!hasPill) {
+                    // Determine cedar amount: prefer snapshot totals; fallback to data-siding-computed-amount or 0
+                    let cedarAmount = 0;
+                    try {
+                      const s = snapshot as any;
+                      const prim = s?.pricing?.primaryTotals;
+                      const alt = s?.pricing?.cedarTotal || s?.pricing?.roofing?.cedarTotal;
+                      // Prefer explicit Cedar Base if present
+                      const cedarBase = s?.pricing?.cedarBase || s?.pricing?.totals?.cedarBase || s?.pricing?.cedar?.base;
+                      if (typeof prim?.cedar === 'number') cedarAmount = prim.cedar;
+                      else if (typeof alt === 'number') cedarAmount = alt;
+                      else if (typeof cedarBase === 'number') cedarAmount = cedarBase;
+                      else if (cedarBase && typeof cedarBase?.amount === 'number') cedarAmount = cedarBase.amount;
+                    } catch {}
+                    if (!cedarAmount) {
+                      const attr = parseFloat(tbl.getAttribute('data-siding-computed-amount')||'0');
+                      if (!isNaN(attr) && attr>0) cedarAmount = attr;
+                    }
+                    // Snapshot-derived computation from sections or line items
+                    if (!cedarAmount) {
+                      try {
+                        const s = snapshot as any;
+                        const p = s?.pricing || {};
+                        // Prefer Cedar Base
+                        const cedarBase = p?.cedarBase || p?.totals?.cedarBase || p?.cedar?.base;
+                        if (!cedarAmount) {
+                          if (typeof cedarBase === 'number' && cedarBase>0) {
+                            cedarAmount = cedarBase;
+                          } else if (cedarBase && typeof cedarBase?.amount === 'number' && cedarBase.amount>0) {
+                            cedarAmount = cedarBase.amount;
+                          }
+                        }
+                        const mode = (p?.cedarMode || '').toString();
+                        const unit = p?.cedarUnit;
+                        // Ignore cedarManual for roofing pill to avoid stale/wrong values
+                        // Determine roof squares from multiple possible places
+                        const squares = (
+                          // common locations we use across proposals
+                          (typeof p?.roofSquares === 'number' ? p.roofSquares : undefined) ??
+                          (typeof s?.measure?.roof?.squares === 'number' ? s.measure.roof.squares : undefined) ??
+                          (typeof s?.computed?.roofSquares === 'number' ? s.computed.roofSquares : undefined) ??
+                          (typeof s?.scope?.roof?.squares === 'number' ? s.scope.roof.squares : undefined)
+                        ) || 0;
+                        if (mode === 'bySquare' || (typeof unit === 'number')) {
+                          // Per-square pricing
+                          let unitPrice = 0;
+                          if (typeof unit === 'number') unitPrice = unit;
+                          else if (unit && typeof unit?.price === 'number') unitPrice = unit.price;
+                          else if (unit && typeof unit?.cedar === 'number') unitPrice = unit.cedar;
+                          if (unitPrice>0 && squares>0) {
+                            cedarAmount = Math.round(unitPrice * squares);
+                          }
+                        }
+                        // If still zero, try sections or line items (existing fallback)
+                        if (!cedarAmount) {
+                          const sec = p?.sections || s?.sections || s?.scope;
+                          const secTotal = sec?.roofing?.cedar?.total || sec?.roofing_cedar?.total || sec?.cedar?.total;
+                          if (typeof secTotal === 'number' && secTotal>0) {
+                            cedarAmount = secTotal;
+                          } else {
+                            const items = p?.lineItems || s?.lineItems || p?.items || [];
+                            let sum = 0;
+                            for (const it of items) {
+                              const tags = (it?.tags || it?.category || it?.section || '').toString().toLowerCase();
+                              const isCedar = /cedar/.test(tags) && /roof/.test(tags);
+                              const amt = (typeof it?.amount === 'number' ? it.amount : (typeof it?.price === 'number' ? it.price : 0));
+                              if (isCedar && amt>0) sum += amt;
+                            }
+                            if (sum>0) cedarAmount = sum;
+                          }
+                        }
+                      } catch {}
+                    }
+                    // Expose for debugging
+                    try { (window as any).hytechDebug = { ...(window as any).hytechDebug, cedarComputedTotal: cedarAmount }; } catch {}
+                    // Fallback: scan table text for currency and pick the max
+                    if (!cedarAmount) {
+                      try {
+                        const re = /\$\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{2})?/g;
+                        const text = tbl.textContent || '';
+                        let m: RegExpExecArray | null;
+                        let max = 0;
+                        while ((m = re.exec(text))) {
+                          const raw = m[1].replace(/,/g, '');
+                          const val = parseFloat(raw);
+                          if (!isNaN(val) && val>max) max = val;
+                        }
+                        if (max>0) cedarAmount = max;
+                      } catch {}
+                    }
+                    // Build a pill element
+                    const pill = document.createElement('label');
+                    pill.className = 'price-choice';
+                    const chk = document.createElement('input');
+                    chk.type = 'checkbox';
+                    chk.className = 'proposal-price-checkbox';
+                    const span = document.createElement('span');
+                    const fmt = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    span.textContent = cedarAmount>0 ? fmt(cedarAmount) : '$ —';
+                    if (cedarAmount>0) pill.setAttribute('data-cedar-pill-computed', '1');
+                    pill.appendChild(chk); pill.appendChild(span);
+                    // Append pill into the TOTAL row cell
+                    const cell = (totalRow.querySelector('td,th') as HTMLElement | null) || null;
+                    if (cell) {
+                      // Keep label intact; inject pill after a space
+                      cell.appendChild(document.createTextNode(' '));
+                      cell.appendChild(pill);
+                    }
+                  }
+                }
+              });
+            } catch {}
+          })();
         // Section-specific enhancers already run elsewhere
         if (key === 'extras:trim' || key === 'extras:windows' || key === 'extras:skylights') continue;
         applyScopedMoneyWrappers(tbl);
@@ -1371,6 +2987,7 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       // Normalize after local injections
       ensureLooseCheckboxPills(container);
       ensurePillVisibility(container);
+  normalizeRoofingTotalInline(container);
     }
 
   // Insert blue section dividers between sections (skip legal/signature) and add top address divider
@@ -1479,6 +3096,398 @@ export default function ProposalView({ params }: { params: { id: string } }) {
               try { recalc(); } catch {}
             }
           }
+        }
+      } catch {}
+    }
+
+    // Ensure ALL roofing tables have visible price pills in their TOTAL INVESTMENT row,
+    // regardless of whether siding sections are displayed. This normalizes pill rendering
+    // across Asphalt, Cedar Shake, DaVinci, and Rubber.
+    function ensureRoofingTotalPills(container: HTMLElement) {
+      try {
+        const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
+        for (const t of tables) {
+          const txt = (t.textContent || '').toUpperCase();
+          const html0 = (t.innerHTML || '').toString();
+          const dsAttr = (t.getAttribute('data-section') || '').toLowerCase();
+          // Detect roofing tables broadly, with additional markers:
+          // - explicit data-section starting with roofing:
+          // - presence of any known roofing total tokens
+          // - relaxed cedar detection: "CEDAR" with common roofing hints
+          const hasRoofToken = /\{\s*(?:asphalt_(?:good|better|best)_total|asphalt_total|davinci_total|cedar_total|rubber_total)\s*\}/i.test(html0);
+          const cedarHint = /\bCEDAR\b/.test(txt) && /(ROOF|ROOFING|RIDGE|ICE\s*&\s*WATER|DECK\s+ARMOR|CEDAR\s+BREATHER|PIPE\s+FLASHINGS|COPPER\s+VALLEYS)/.test(txt);
+          const isRoof = dsAttr.startsWith('roofing:') || hasRoofToken || cedarHint ||
+            /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX|CEDAR\s+SHAKE\s+ROOF(ING)?|DAVINCI|RUBBER\s+ROOF(ING)?)/.test(txt);
+          if (!isRoof) continue;
+          // Find TOTAL INVESTMENT row
+          const rows = Array.from(t.querySelectorAll('tr')) as HTMLTableRowElement[];
+          const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+          if (!totalRow) continue;
+          // If Asphalt GBB, do not inject a label-cell pill here; G/B/B handled elsewhere
+          const isAsphalt = dsAttr === 'roofing:asphalt' || /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txt);
+          const hasGBB = /GOOD|BETTER|BEST/i.test(totalRow.textContent || '') || Array.from(totalRow.querySelectorAll('[data-gbb]')).length > 0;
+          if (isAsphalt && hasGBB) {
+            // Also remove any existing pill mistakenly present in the label cell
+            const cellsA = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+            const labelCellA = (cellsA.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cellsA[0]) as HTMLElement;
+            Array.from(labelCellA.querySelectorAll('label.price-choice')).forEach(el => (el as HTMLElement).remove());
+            continue;
+          }
+          // Respect Asphalt authority only for Asphalt tables; never block cedar injection
+          const authority = String((totalRow as HTMLElement).getAttribute('data-gbb-authority') || '').toLowerCase();
+          const isCedarCtx = dsAttr === 'roofing:cedar' || /\bCEDAR\b/.test(txt);
+          if (authority === 'asphalt' && !isCedarCtx) {
+            const existingPills = Array.from((totalRow as HTMLElement).querySelectorAll('label.price-choice')) as HTMLElement[];
+            if (existingPills.length > 0) continue;
+          }
+          const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+          let changedAny = false;
+          for (const cell of cells) {
+            // If cell already has a pill, skip
+            if (cell.querySelector('label.price-choice')) continue;
+            const html0 = cell.innerHTML;
+            // contiguous pattern first
+            const contRe = /(\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?)(?!\s*[A-Za-z])/;
+            const crossRe = /\$[\s\S]{0,400}?[0-9][0-9,]*(?:\.[0-9]{2})?/;
+            let applied = false;
+            if (contRe.test(html0)) {
+              const html1 = html0.replace(contRe, (m) => {
+                const amt = Number(m.replace(/[^0-9.\-]/g, ''));
+                if (!isFinite(amt) || amt <= 0) return m;
+                applied = true;
+                return `<label class="price-choice gbb"><input type="checkbox" class="proposal-price-checkbox" data-amount="${amt}"><span>${m}</span></label>`;
+              });
+              if (applied) { cell.innerHTML = html1; changedAny = true; continue; }
+            }
+            // cross-tag fallback
+            if (crossRe.test(html0)) {
+              const html2 = html0.replace(crossRe, (seg) => {
+                const plain = seg.replace(/<[^>]*>/g, '');
+                const m = plain.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/);
+                if (!m) return seg;
+                // Guard: skip units like "mil" immediately after number
+                const after = plain.slice(plain.indexOf(m[1]) + m[1].length);
+                const next = (after.match(/^(?:\s|\u00A0)*([^\s\u00A0])/)||[])[1] || '';
+                if (/^[A-Za-z]/.test(next)) return seg;
+                const amt = Number((m[1] || '').replace(/[^0-9.\-]/g, ''));
+                if (!isFinite(amt) || amt <= 0) return seg;
+                applied = true;
+                return `<label class="price-choice gbb"><input type="checkbox" class="proposal-price-checkbox" data-amount="${amt}">${seg}</label>`;
+              });
+              if (applied) { cell.innerHTML = html2; changedAny = true; }
+            }
+          }
+          // Cedar-specific fallback: if no pills were created in the TOTAL row, inject from snapshot/table
+          if (!Array.from(totalRow.querySelectorAll('label.price-choice')).length) {
+            const isCedarRoof = dsAttr === 'roofing:cedar' || (/\bCEDAR\b/.test(txt) && /(ROOF|ROOFING|RIDGE|ICE\s*&\s*WATER|DECK\s+ARMOR|CEDAR\s+BREATHER|PIPE\s+FLASHINGS|COPPER\s+VALLEYS)/.test(txt) && !/\bSIDING\b/.test(txt));
+            if (isCedarRoof) {
+              const fmtUsd = (n: number): string => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+              const getSnapCedar = (): number => { try { return Number((snapshot as any)?.computed?.primaryTotals?.cedar || 0) || 0; } catch { return 0; } };
+              // Scan entire table for money; choose maximum if present
+              const tableText = (t.innerText || '').toString();
+              const moneyRe = /\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g;
+              const parsed = (tableText.match(moneyRe) || []).map(s => Number((s || '').replace(/[^0-9.\-]/g, '').replace(/,/g, ''))).filter(v => isFinite(v) && v > 0);
+              const maxInTable = parsed.length ? Math.max(...parsed) : 0;
+              const cedarAmt = maxInTable > 0 ? maxInTable : (getSnapCedar() || getEffectiveCedarTotalFromSnapshot());
+              if (cedarAmt > 0) {
+                // Choose the label cell (prefer pre-marked anchor)
+                const cells2 = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+                const labelCell = (cells2.find(c => c.getAttribute('data-roofing-total-label') === '1')
+                  || cells2.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || ''))
+                  || cells2[cells2.length - 1]) as HTMLElement | undefined;
+                if (labelCell) {
+                  const wrap = document.createElement('label');
+                  wrap.className = 'price-choice';
+                  const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; input.setAttribute('data-amount', String(cedarAmt));
+                  const span = document.createElement('span'); span.textContent = fmtUsd(cedarAmt);
+                  wrap.appendChild(input); wrap.appendChild(span);
+                  // Insert immediately after the label text inside labelCell when possible
+                  let inserted = false;
+                  try {
+                    const labelRe = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+                    const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+                    while (walker.nextNode()) {
+                      const tn = walker.currentNode as Text;
+                      const text = tn.textContent || '';
+                      const m = text.match(labelRe);
+                      if (!m) continue;
+                      const idx = text.search(labelRe) + m[0].length;
+                      const before = text.slice(0, idx);
+                      const after = text.slice(idx).replace(/^\s+/, ' ');
+                      const frag = document.createDocumentFragment();
+                      frag.appendChild(document.createTextNode(before + ' '));
+                      frag.appendChild(wrap);
+                      if (after) frag.appendChild(document.createTextNode(after));
+                      (tn.parentNode as Node).replaceChild(frag, tn);
+                      inserted = true;
+                      break;
+                    }
+                  } catch {}
+                  if (!inserted) {
+                    try { labelCell.appendChild(document.createTextNode(' ')); } catch {}
+                    labelCell.appendChild(wrap);
+                  }
+                  changedAny = true;
+                }
+              }
+            }
+          }
+          if (changedAny) { try { recalc(); } catch {} }
+        }
+      } catch {}
+    }
+
+    // Asphalt GBB: Move any pill out of the TOTAL label cell and inject pills into
+    // the next three cells marked data-gbb="good|better|best" using per-tier amounts.
+    function ensureAsphaltGBBPlacement(container: HTMLElement) {
+      try {
+        const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
+        for (const t of tables) {
+          const txt = (t.textContent || '').toUpperCase();
+          if (!/(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX)/.test(txt)) continue;
+          // Find TOTAL INVESTMENT row that contains gbb cells
+          const rows = Array.from(t.querySelectorAll('tr')) as HTMLTableRowElement[];
+          const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+          if (!totalRow) continue;
+          const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLTableCellElement[];
+          const labelCell = cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[0];
+          // If the TOTAL row collapsed into a single cell (colSpan >= 3), render three inline pills after the label text
+          const colSpan = Number((labelCell as HTMLTableCellElement).colSpan || 1);
+          if (cells.length === 1 && colSpan >= 3) {
+            // Determine tier amounts via snapshot or scanning above columns if possible
+            const s: any = snapshot || {};
+            const pr: any = (s.pricing || {}).asphalt || (s.pricing || {}).roof || {};
+            const snapGood = Number(pr?.good || pr?.northgateGood || pr?.climateflexGood || 0) || 0;
+            const snapBetter = Number(pr?.better || pr?.northgateBetter || pr?.climateflexBetter || 0) || 0;
+            const snapBest = Number(pr?.best || pr?.northgateBest || pr?.climateflexBest || 0) || 0;
+            const fmt = (n: number) => { try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); } catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; } };
+            // Remove any existing pill in the label cell
+            Array.from(labelCell.querySelectorAll('label.price-choice')).forEach(el => (el as HTMLElement).remove());
+            // Insert inline after the label text
+            const injectInline = (amount: number, cls: string) => {
+              const pill = document.createElement('label'); pill.className = `price-choice gbb ${cls}`;
+              const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; if (amount>0) input.setAttribute('data-amount', String(amount));
+              const span = document.createElement('span'); span.textContent = amount>0 ? fmt(amount) : '';
+              pill.appendChild(input); pill.appendChild(span);
+              // Add a leading space
+              labelCell.appendChild(document.createTextNode(' '));
+              labelCell.appendChild(pill);
+            };
+            injectInline(snapGood, 'tier-good');
+            injectInline(snapBetter, 'tier-better');
+            injectInline(snapBest, 'tier-best');
+            continue; // handled collapsed case
+          }
+          const goodCell = cells.find(c => (c.getAttribute('data-gbb') || '').toLowerCase() === 'good') || null;
+          const betterCell = cells.find(c => (c.getAttribute('data-gbb') || '').toLowerCase() === 'better') || null;
+          const bestCell = cells.find(c => (c.getAttribute('data-gbb') || '').toLowerCase() === 'best') || null;
+          // Fallback by position if data-gbb attributes are missing: labelCell then next three cells
+          let gc = goodCell, bc = betterCell, xc = bestCell;
+          if (!gc || !bc || !xc) {
+            const idxLabel = cells.findIndex(c => c === labelCell);
+            const posGood = cells[idxLabel + 1] || null;
+            const posBetter = cells[idxLabel + 2] || null;
+            const posBest = cells[idxLabel + 3] || null;
+            gc = gc || posGood; bc = bc || posBetter; xc = xc || posBest;
+          }
+          if (!gc && !bc && !xc) continue;
+
+          // Helper to parse a $ amount from a cell's text
+          const parseAmtFromCell = (cell: HTMLElement | null): number => {
+            if (!cell) return 0;
+            const m = (cell.textContent || '').match(/\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/);
+            if (!m) return 0;
+            const n = Number(m[1].replace(/,/g, ''));
+            return Number.isFinite(n) ? n : 0;
+          };
+          // Scan column above the TOTAL row to find an amount in each tier's column
+          const findAmtInColumn = (cell: HTMLTableCellElement | null): number => {
+            if (!cell) return 0;
+            // Determine column index among cells of the TOTAL row
+            const totalCells = cells;
+            const colIdx = totalCells.findIndex(c => c === cell);
+            if (colIdx < 0) return 0;
+            // Walk previous rows and look for first $ amount in the same column index
+            for (let i = rows.indexOf(totalRow) - 1; i >= 0; i--) {
+              const r = rows[i];
+              const rCells = Array.from(r.querySelectorAll('td,th')) as HTMLTableCellElement[];
+              // If row has fewer cells, skip; if has more, try the same index
+              const target = rCells[colIdx] || null;
+              const val = parseAmtFromCell(target);
+              if (val > 0) return val;
+            }
+            return 0;
+          };
+          // Snapshot pricing fallback
+          const s: any = snapshot || {};
+          const pr: any = (s.pricing || {}).asphalt || (s.pricing || {}).roof || {};
+          const snapGood = Number(pr?.good || pr?.northgateGood || pr?.climateflexGood || 0) || 0;
+          const snapBetter = Number(pr?.better || pr?.northgateBetter || pr?.climateflexBetter || 0) || 0;
+          const snapBest = Number(pr?.best || pr?.northgateBest || pr?.climateflexBest || 0) || 0;
+
+          // Determine amounts per tier
+          const amtGood = parseAmtFromCell(gc) || findAmtInColumn(gc as HTMLTableCellElement) || snapGood;
+          const amtBetter = parseAmtFromCell(bc) || findAmtInColumn(bc as HTMLTableCellElement) || snapBetter;
+          const amtBest = parseAmtFromCell(xc) || findAmtInColumn(xc as HTMLTableCellElement) || snapBest;
+
+          const fmt = (n: number) => {
+            try { return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }); }
+            catch { return `$${(Math.round(n*100)/100).toFixed(2)}`; }
+          };
+      const ensurePill = (cell: HTMLElement | null, amount: number) => {
+            if (!cell) return;
+            // If a pill already exists, update its span text and ensure input first
+            let pill = cell.querySelector('label.price-choice') as HTMLElement | null;
+            if (!pill) {
+              pill = document.createElement('label'); pill.className = 'price-choice gbb';
+        const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; if (amount>0) input.setAttribute('data-amount', String(amount));
+        const span = document.createElement('span'); span.textContent = amount>0 ? fmt(amount) : '';
+              pill.appendChild(input); pill.appendChild(span);
+              // Clear cell whitespace and append centered
+              cell.appendChild(pill);
+            } else {
+              const input = (pill.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null) || document.createElement('input');
+              input.type = 'checkbox'; input.className = 'proposal-price-checkbox'; input.setAttribute('data-amount', String(amount));
+              const span = (pill.querySelector('span') as HTMLSpanElement | null) || document.createElement('span');
+        span.textContent = amount>0 ? fmt(amount) : '';
+              // Ensure input first then span
+              if (pill.firstElementChild !== input) pill.insertBefore(input, pill.firstElementChild || null);
+              if (!pill.contains(span)) pill.appendChild(span);
+            }
+          };
+
+          // Move any pill out of the label cell
+          Array.from(labelCell.querySelectorAll('label.price-choice')).forEach(el => {
+            // If no good cell, leave it; otherwise move to good cell
+            if (gc) {
+              el.remove();
+              gc.appendChild(el);
+            }
+          });
+
+          // Clean any trailing $ amounts like $0.00 left inside the label cell text
+          try {
+            const walk = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+            const toRemove: Text[] = [];
+            while (walk.nextNode()) {
+              const tn = walk.currentNode as Text;
+              const s0 = tn.textContent || '';
+              // Remove any currency-like fragments; normalize spacing and colons
+              const s1 = s0
+                .replace(/\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g, '')
+                .replace(/\$\s*0(?:\.00)?/g, '')
+                .replace(/\s{2,}/g, ' ')
+                .replace(/\s+:\s*/g, ': ');
+              if (s1 !== s0) tn.textContent = s1;
+              if (!/(\S)/.test(tn.textContent || '')) toRemove.push(tn);
+            }
+            toRemove.forEach(n => n.parentNode?.removeChild(n));
+          } catch {}
+
+          // Ensure pills per G/B/B tier
+          ensurePill(gc as HTMLElement, amtGood);
+          ensurePill(bc as HTMLElement, amtBetter);
+          ensurePill(xc as HTMLElement, amtBest);
+        }
+      } catch {}
+    }
+
+    // Post-pass: for any roofing TOTAL row, move pills into the label cell, insert inline after the label,
+    // and remove any trailing $0.00 or duplicate $ amounts in other cells. Fixes Rubber showing pill inline only
+    // when price is $0 and centering underneath when a price exists.
+    function normalizeRoofingTotalInline(container: HTMLElement) {
+      try {
+        const tables = Array.from(container.querySelectorAll('table')) as HTMLElement[];
+        for (const t of tables) {
+          const txt = (t.textContent || '').toUpperCase();
+          const dsAttr = (t.getAttribute('data-section') || '').toLowerCase();
+          const isRoof = dsAttr.startsWith('roofing:') || /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX|CEDAR\s+SHAKE\s+ROOF(ING)?|DAVINCI|RUBBER\s+ROOF(ING)?)/.test(txt);
+          if (!isRoof) continue;
+          const rows = Array.from(t.querySelectorAll('tr')) as HTMLTableRowElement[];
+          const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*[:\-–—]?/i.test(r.textContent || '')) || null;
+          if (!totalRow) continue;
+          // Skip Asphalt GBB tables to avoid moving/removing Good/Better/Best pills
+          const hasGBB = /GOOD|BETTER|BEST/i.test(totalRow.textContent || '') ||
+            Array.from(totalRow.querySelectorAll('[data-gbb]')).length > 0 ||
+            /(ASPHALT|SHINGLE|NORTHGATE|CLIMATEFLEX)/.test(txt);
+          // For DaVinci, never move pills or center them; we handle inline placement earlier.
+          if (/DAVINCI/i.test(txt)) continue;
+          if (hasGBB) continue;
+          const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+          if (!cells.length) continue;
+          const labelCell = (cells.find(c => /TOTAL\s+INVESTMENT/i.test(c.textContent || '')) || cells[cells.length - 1]) as HTMLElement;
+
+          // Collect pills in the row (from any cell)
+          const pills = Array.from(totalRow.querySelectorAll('label.price-choice')) as HTMLElement[];
+          if (!pills.length) continue;
+
+          // Ensure first pill is placed inline after the label in the labelCell
+          const primary = pills[0];
+          if (primary.closest('td,th') !== labelCell) {
+            // Move it to label cell
+            labelCell.appendChild(primary);
+          }
+
+          // Insert inline right after the label text
+          try {
+            const labelRe = /TOTAL\s+INVESTMENT\s*[:\-–—]?/i;
+            const walker = document.createTreeWalker(labelCell, NodeFilter.SHOW_TEXT);
+            let inserted = false;
+            while (walker.nextNode()) {
+              const tn = walker.currentNode as Text;
+              const s = tn.textContent || '';
+              const m = s.match(labelRe);
+              if (!m) continue;
+              const end = s.search(labelRe) + m[0].length;
+              const before = s.slice(0, end);
+              const after = s.slice(end).replace(/^\s+/, ' ');
+              const frag = document.createDocumentFragment();
+              frag.appendChild(document.createTextNode(before + ' '));
+              frag.appendChild(primary);
+              if (after) frag.appendChild(document.createTextNode(after));
+              (tn.parentNode as Node).replaceChild(frag, tn);
+              inserted = true;
+              break;
+            }
+            if (!inserted) {
+              // As fallback, prepend a space then the pill
+              labelCell.insertBefore(primary, labelCell.firstChild);
+            }
+          } catch {}
+
+          // Remove trailing $0.00 or additional $ amounts in the rest of the row
+          for (const c of cells) {
+            if (c === labelCell) {
+              // In label cell, remove any bare "$0.00" or standalone "$" after the pill
+              const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT);
+              const edits: Text[] = [];
+              while (walker.nextNode()) {
+                const tn = walker.currentNode as Text;
+                const s0 = tn.textContent || '';
+                const s1 = s0.replace(/\$\s*0(?:\.00)?/g, '').replace(/\s*\$\s*$/g, '');
+                if (s1 !== s0) tn.textContent = s1;
+                if (!/\S/.test(tn.textContent || '')) edits.push(tn);
+              }
+              edits.forEach(n => n.parentNode?.removeChild(n));
+            } else {
+              // In non-label cells, strip any currency spans and $ amounts completely
+              Array.from(c.querySelectorAll('label.price-choice,.trim-total-amount,.trim-total-dollar')).forEach(el => (el as HTMLElement).remove());
+              const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT);
+              const edits: Text[] = [];
+              while (walker.nextNode()) {
+                const tn = walker.currentNode as Text;
+                const s0 = tn.textContent || '';
+                const s1 = s0.replace(/\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?/g, '').replace(/\$/g, '');
+                if (s1 !== s0) tn.textContent = s1;
+                if (!/\S/.test(tn.textContent || '')) edits.push(tn);
+              }
+              edits.forEach(n => n.parentNode?.removeChild(n));
+            }
+          }
+
+          // Remove any extra pills beyond the first to avoid duplicates (non-GBB tables only)
+          const extras = pills.slice(1);
+          extras.forEach(p => p.remove());
         }
       } catch {}
     }
@@ -2609,16 +4618,9 @@ export default function ProposalView({ params }: { params: { id: string } }) {
         const debug: Array<{section: string; amount: number; tables: number}> = [];
         for (const sec of SECTIONS) {
           const amt = Number((amounts as any)[sec.key] || 0);
-          // Find tables even if currently hidden; totals should still be emitted when data exists
           const tables = findSectionTables(sec.key as any);
           debug.push({ section: sec.key, amount: amt, tables: tables.length });
           for (const tbl of tables) {
-            // If a section table is hidden but has a positive subtotal, unhide to show totals and pills
-            try {
-              if (amt > 0 && (tbl as HTMLElement).style.display === 'none') {
-                (tbl as HTMLElement).style.display = '';
-              }
-            } catch {}
             const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
             let totalRow: HTMLTableRowElement | null = rows.find(r => /TOTAL\s+INVESTMENT\s*:/i.test(r.textContent || '')) || null;
             const colCount = Math.max(1, ...rows.map(r => Array.from(r.querySelectorAll('td,th')).length), 1);
@@ -2669,9 +4671,6 @@ export default function ProposalView({ params }: { params: { id: string } }) {
                 pill.appendChild(input);
               }
               input.setAttribute('data-amount', String(amt));
-              // Mark authority for consistent handling
-              try { (totalRow as HTMLElement).setAttribute('data-siding-total-row', '1'); } catch {}
-              try { (td as HTMLElement).setAttribute('data-siding-total', '1'); } catch {}
             }
             totalRow.appendChild(td);
             // Ensure no Trim markers remain on this row/cell that could force left alignment or strip pills
@@ -2752,9 +4751,281 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       }
     } catch {}
   })();
+
+  // Generalized roofing enforcement: remove cross-gating and stabilize TOTAL INVESTMENT pills
+  (function enforceRoofingIndependence(){
+    try {
+      const root = containerRef.current as HTMLElement | null; if (!root) return;
+      const fmtUsd = (n: number) => {
+        if (!isFinite(n)) n = 0; const s = (Math.round(n * 100) / 100).toFixed(2);
+        const parts = s.split('.'); const int = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ','); return `$${int}.${parts[1]}`;
+      };
+      const getPrim = () => {
+        const snap: any = snapshot || {}; const prim = (snap?.computed?.primaryTotals ?? {}) as any; const pricing = (snap?.pricing ?? {}) as any;
+        // Prefer raw bases when present
+        return {
+          asphalt: Number(prim.asphalt ?? pricing?.asphaltBase ?? 0),
+          davinci: Number(prim.davinci ?? pricing?.davinciBase ?? 0),
+          cedar: Number(prim.cedar ?? pricing?.cedarBase ?? 0),
+        };
+      };
+      const prim = getPrim();
+      // 1) Strip any gating authorities inside roofing tables
+      Array.from(root.querySelectorAll('table[data-section^="roofing:"] [data-gbb-authority]'))
+        .forEach((el) => { (el as HTMLElement).removeAttribute('data-gbb-authority'); });
+      // Also observe and strip if reintroduced later by other passes
+      const roofingTables = Array.from(root.querySelectorAll('table[data-section^="roofing:"]')) as HTMLElement[];
+      roofingTables.forEach((rt) => {
+        const stripNow = () => Array.from(rt.querySelectorAll('[data-gbb-authority]')).forEach((el) => (el as HTMLElement).removeAttribute('data-gbb-authority'));
+        stripNow();
+        const obsAttr = new MutationObserver((muts) => {
+          let needsStrip = false;
+          for (const m of muts) {
+            if (m.type === 'attributes' && (m.attributeName === 'data-gbb-authority')) needsStrip = true;
+            if (m.type === 'childList') needsStrip = true;
+          }
+          if (needsStrip) stripNow();
+        });
+        obsAttr.observe(rt, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-gbb-authority'] });
+        cleanupFnsRef.current.push(() => { try { obsAttr.disconnect(); } catch {} });
+      });
+      // 2) For each roofing section table, ensure TOTAL INVESTMENT row has a pill with the right amount
+      const tables = Array.from(root.querySelectorAll('table[data-section^="roofing:"]')) as HTMLElement[];
+      tables.forEach((tbl) => {
+        const section = tbl.getAttribute('data-section') || '';
+  const typMatch = /roofing:([a-z0-9_-]+)/i.exec(section);
+  const typ = (typMatch?.[1] || '').toLowerCase();
+  // Base amount preference: computed.primaryTotals -> pricing bases -> table scan (largest $)
+  let amt = (typ === 'asphalt' ? prim.asphalt : typ === 'davinci' ? prim.davinci : typ === 'cedar' ? prim.cedar : 0);
+        const parseUsd = (s: string) => {
+          const m = s.match(/\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)/);
+          if (!m) return 0; return Number(m[1].replace(/,/g, '')) || 0;
+        };
+        if (!(isFinite(amt) && amt > 0)) {
+          // Look for explicit "Base:" labels or any price within this section table
+          let best = 0;
+          const text = (tbl.textContent || '').toString();
+          const bases = Array.from(text.matchAll(/Base\s*:\s*\$\s*[0-9.,]+/gi)).map(m => parseUsd(m[0]));
+          for (const v of bases) best = Math.max(best, v);
+          if (best <= 0) {
+            const allPrices = Array.from(text.matchAll(/\$\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?/g)).map(m => parseUsd(m[0]));
+            for (const v of allPrices) best = Math.max(best, v);
+          }
+          if (best > 0) amt = best;
+        }
+        const tr = Array.from(tbl.querySelectorAll('tr')).find((r) => /TOTAL\s+INVESTMENT/i.test(r.textContent || '')) as HTMLTableRowElement | undefined;
+        if (!tr) return;
+  // Prefer the label cell (contains TOTAL INVESTMENT) as the pill anchor
+  const tds = Array.from(tr.querySelectorAll('td,th')) as HTMLElement[];
+  const labelCell = tds.find((c) => /TOTAL\s+INVESTMENT/i.test((c.textContent || ''))) as HTMLElement | undefined;
+  let cell = (labelCell || tds[tds.length - 1] || tds[0]); if (!cell) return;
+        // If the last cell is the label and there's only one cell, we will insert the pill inline in the same cell and center it
+  const isLabelCell = /TOTAL\s+INVESTMENT/i.test(cell.textContent || '');
+  if (isLabelCell) {
+          // Center contents and allow inline pill next to label text
+          try {
+            const style = cell.getAttribute('style') || '';
+            if (!/text-align/i.test(style)) cell.setAttribute('style', `${style ? style + '; ' : ''}text-align:center;`);
+          } catch {}
+        }
+        // Deduplicate any existing pills in the row: keep only one in the rightmost cell
+        const pillsInRow = Array.from(tr.querySelectorAll('label.price-choice')) as HTMLElement[];
+        if (pillsInRow.length > 0) {
+          const keepTarget = cell; // label cell if present
+          let kept = false;
+          pillsInRow.forEach((p) => {
+            if (!kept) {
+              // Move first pill to the rightmost cell if it isn't there
+              if (p.parentElement !== keepTarget) {
+                try { keepTarget.appendChild(p); } catch {}
+              }
+              kept = true;
+            } else {
+              // Remove extras
+              try { p.remove(); } catch {}
+            }
+          });
+        }
+        // If a late pass rewrote with $0.00, capture and replace
+        const hasZero = /\$\s*0(?:\.00)?\b/.test(cell.textContent || '');
+        const existingPill = cell.querySelector('label.price-choice');
+    const ensurePill = () => {
+          if (existingPill) {
+            const span = existingPill.querySelector('span'); if (span) span.textContent = fmtUsd(amt);
+            const chk = existingPill.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null; if (chk) chk.setAttribute('data-amount', String(amt));
+            return existingPill;
+          }
+          const wrap = document.createElement('label'); wrap.className = 'price-choice';
+          const span = document.createElement('span'); span.textContent = fmtUsd(amt);
+          const chk = document.createElement('input'); chk.type = 'checkbox'; chk.className = 'proposal-price-checkbox'; chk.setAttribute('data-amount', String(amt));
+          wrap.appendChild(span); wrap.appendChild(chk);
+          // Insert after any existing dollar text; otherwise append
+          let placed = false;
+          // If the label cell contains a trim-total-amount span and we have a non-zero amount, replace it inline
+          const onlyOneCell = isLabelCell && tds.length >= 1; // treat label cell as anchor even if multiple cells
+          if (onlyOneCell && isFinite(amt) && amt > 0) {
+            const targetAmtSpan = cell.querySelector('.trim-total-amount') as HTMLElement | null;
+            if (targetAmtSpan) {
+              try {
+                const para = targetAmtSpan.closest('p') as HTMLElement | null;
+                if (para) {
+                  targetAmtSpan.replaceWith(wrap);
+                  placed = true;
+                } else {
+                  targetAmtSpan.replaceWith(wrap);
+                  placed = true;
+                }
+              } catch {}
+            }
+          }
+          // Look for a text node containing the dollar sign to replace
+          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const tn = walker.currentNode as Text; const txt = tn.textContent || '';
+      // Only replace an existing dollar amount when we have a non-zero amount; otherwise append to preserve label
+      if ((/\$\s*[0-9]/.test(txt) || /\$\s*0(?:\.00)?\b/.test(txt)) && (isFinite(amt) && amt > 0)) {
+              const parent = tn.parentNode as Node; parent.replaceChild(wrap, tn); placed = true; break;
+            }
+          }
+          if (!placed) {
+            // Inline after label within same cell when only one cell; keep centered
+            if (onlyOneCell) {
+              const para = Array.from(cell.querySelectorAll('p,div,span')).find((el) => /TOTAL\s+INVESTMENT/i.test(el.textContent || '')) as HTMLElement | undefined;
+              if (para) {
+                // Try to insert right after the label text node inside the paragraph
+                let inserted = false;
+                const walker2 = document.createTreeWalker(para, NodeFilter.SHOW_TEXT);
+                while (walker2.nextNode()) {
+                  const tn2 = walker2.currentNode as Text; const txt2 = tn2.textContent || '';
+                  const m = txt2.match(/TOTAL\s+INVESTMENT\s*:/i);
+                  if (m) {
+                    // Split text after the label and insert pill
+                    const idx = txt2.indexOf(m[0]) + m[0].length;
+                    const before = txt2.slice(0, idx);
+                    const after = txt2.slice(idx);
+                    const parent = tn2.parentNode as Node;
+                    const frag = document.createDocumentFragment();
+                    frag.appendChild(document.createTextNode(before + ' '));
+                    frag.appendChild(wrap);
+                    if (after) frag.appendChild(document.createTextNode(after));
+                    parent.replaceChild(frag, tn2);
+                    inserted = true;
+                    break;
+                  }
+                }
+                if (!inserted) {
+                  para.appendChild(document.createTextNode(' '));
+                  para.appendChild(wrap);
+                }
+              } else {
+                cell.appendChild(document.createTextNode(' '));
+                cell.appendChild(wrap);
+              }
+            } else {
+              cell.appendChild(wrap);
+            }
+          }
+          return wrap;
+        };
+    // Always ensure a pill exists so UI doesn’t depend on siding selection or cross-gating
+    ensurePill();
+        // 3) Guard against post-render mutations changing the price
+        const obs = new MutationObserver((muts) => {
+          for (const m of muts) {
+            if (m.type === 'childList' || m.type === 'characterData') {
+              const pill = cell.querySelector('label.price-choice');
+              if (pill) {
+                const span = pill.querySelector('span'); if (span && span.textContent !== fmtUsd(amt)) span.textContent = fmtUsd(amt);
+                const chk = pill.querySelector('input.proposal-price-checkbox') as HTMLInputElement | null; if (chk) chk.setAttribute('data-amount', String(amt));
+              } else {
+                ensurePill();
+              }
+            }
+          }
+        });
+        obs.observe(cell, { subtree: true, childList: true, characterData: true });
+        cleanupFnsRef.current.push(() => { try { obs.disconnect(); } catch {} });
+      });
+    } catch {}
+  })();
+
+  // Cedar Roofing: ensure TOTAL INVESTMENT shows a pill independent of siding state
+  (function ensureCedarRoofingTotalPill(){
+    try {
+      const root = containerRef.current as HTMLElement | null;
+      if (!root) return;
+      const cedarTables = Array.from(root.querySelectorAll('table[data-section="roofing:cedar"]')) as HTMLElement[];
+      for (const t of cedarTables) {
+        const rows = Array.from(t.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*:?/i.test(r.textContent || '')) || null;
+        if (!totalRow) continue;
+        const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+        for (const cell of cells) {
+          if (cell.querySelector('label.price-choice')) continue;
+          const html0 = cell.innerHTML;
+          const contRe = /(\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?)(?!\s*[A-Za-z])/;
+          if (!contRe.test(html0)) continue;
+          const html1 = html0.replace(contRe, (m) => {
+            const amt = Number(m.replace(/[^0-9.\-]/g, ''));
+            if (!isFinite(amt) || amt <= 0) return m;
+            return `<label class="price-choice"><span>${m}</span><input type="checkbox" class="proposal-price-checkbox" data-amount="${amt}"></label>`;
+          });
+          cell.innerHTML = html1;
+        }
+      }
+    } catch {}
+  })();
   ensureTrimPhotosFallback(root);
   try { normalizeRoofingTotalRows(root); } catch {}
   try { hideRoofingSelectionPrompt(root); } catch {}
+  // Ensure roofing TOTAL rows always show a pill when a positive amount exists, even if the section is first
+  (function ensureRoofingTotalsVisible(){
+    try {
+      const tables = Array.from(root.querySelectorAll('table')) as HTMLElement[];
+      // Find visible roofing tables in template order
+      const roofingTables = tables.filter(t => {
+        const txt = (t.textContent || '').toUpperCase();
+        const ds = String(t.getAttribute('data-section') || '').toLowerCase();
+        return (ds.startsWith('roofing:') || /(ASPHALT|SHINGLE|LANDMARK|NORTHGATE|CLIMATEFLEX|DAVINCI|CEDAR\s+SHAKE\s+ROOFING|RUBBER\s+ROOF(ING)?)/.test(txt));
+      }).filter(t => (t as HTMLElement).style.display !== 'none');
+      for (const tbl of roofingTables) {
+        const rows = Array.from(tbl.querySelectorAll('tr')) as HTMLTableRowElement[];
+        const totalRow = rows.find(r => /TOTAL\s+INVESTMENT\s*:?/i.test(r.textContent || '')) || null;
+        if (!totalRow) continue;
+        const cells = Array.from(totalRow.querySelectorAll('td,th')) as HTMLElement[];
+        for (const cell of cells) {
+          // If a pill already exists, keep it
+          if (cell.querySelector('label.price-choice')) continue;
+          const html0 = cell.innerHTML;
+          // contiguous money detection; avoid unit-following letters
+          const contRe = /(\$\s*[0-9][0-9,]*(?:\.[0-9]{2})?)(?!\s*[A-Za-z])/;
+          if (contRe.test(html0)) {
+            cell.innerHTML = html0.replace(contRe, (m) => {
+              const amt = Number(m.replace(/[^0-9.\-]/g, ''));
+              if (!isFinite(amt) || amt <= 0) return m;
+              return `<label class="price-choice gbb"><input type="checkbox" class="proposal-price-checkbox" data-amount="${amt}"><span>${m}</span></label>`;
+            });
+            continue;
+          }
+          // cross-tag scan if needed
+          const moneyRe = /\$[\s\S]{0,400}?[0-9][0-9,]*(?:\.[0-9]{2})?/;
+          if (moneyRe.test(html0)) {
+            cell.innerHTML = html0.replace(moneyRe, (seg) => {
+              const plain = seg.replace(/<[^>]*>/g, '');
+              const m = plain.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/);
+              if (!m) return seg;
+              const after = plain.slice(plain.indexOf(m[1]) + m[1].length);
+              const next = (after.match(/^(?:\s|\u00A0)*([^\s\u00A0])/)||[])[1] || '';
+              if (/^[A-Za-z]/.test(next)) return seg;
+              const amt = Number((m[1] || '').replace(/[^0-9.\-]/g, ''));
+              if (!isFinite(amt) || amt <= 0) return seg;
+              return `<label class="price-choice gbb">${seg}<input type="checkbox" class="proposal-price-checkbox" data-amount="${amt}"></label>`;
+            });
+          }
+        }
+      }
+    } catch {}
+  })();
   ensureNorthGateGBBPill(root);
   ensureAsphaltColorBlank(root);
   stripNonTotalRoofingPills(root);
@@ -3120,15 +5391,31 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       const tbl = el ? (el.closest('table') as HTMLElement | null) : null;
       return !!findGBBHeaderRow(tbl);
     };
+    const inRoofingTable = (el: HTMLElement | null) => {
+      const tbl = el ? (el.closest('table') as HTMLElement | null) : null;
+      return isRoofingTable(tbl);
+    };
 
     let finalTotalEl: HTMLElement | null = null;
-    const finalCandidates = totalEls.filter(el => /TOTAL\s+INVESTMENT\s*:/i.test(el.textContent || ''));
-    if (finalCandidates.length) {
-      // choose the last candidate that is not in a GBB table; fallback to the last one
-      for (let i = finalCandidates.length - 1; i >= 0; i--) {
-        if (!inGBBTable(finalCandidates[i])) { finalTotalEl = finalCandidates[i]; break; }
+    // Acceptance-specific targeting: prefer the bold span inside WordSection2 that contains "TOTAL INVESTMENT: $" and an <o:p>
+    try {
+      const spans = Array.from(document.querySelectorAll('div.WordSection2 span')) as HTMLSpanElement[];
+      const accSpan = spans.find(sp => {
+        if (!/TOTAL\s+INVESTMENT\s*:\s*\$/i.test(sp.textContent || '')) return false;
+        try { return !!sp.querySelector('o\\:p'); } catch { return false; }
+      }) || null;
+      if (accSpan) finalTotalEl = accSpan as unknown as HTMLElement;
+    } catch {}
+    if (!finalTotalEl) {
+      // Consider only plain TOTAL INVESTMENT labels that are not inside roofing tables
+      const finalCandidates = totalEls.filter(el => /TOTAL\s+INVESTMENT\s*:/i.test(el.textContent || '') && !inRoofingTable(el));
+      if (finalCandidates.length) {
+        // Prefer the last candidate that is not in a GBB table; fallback to the last non-roofing candidate
+        for (let i = finalCandidates.length - 1; i >= 0; i--) {
+          if (!inGBBTable(finalCandidates[i])) { finalTotalEl = finalCandidates[i]; break; }
+        }
+        if (!finalTotalEl) finalTotalEl = finalCandidates[finalCandidates.length - 1];
       }
-      if (!finalTotalEl) finalTotalEl = finalCandidates[finalCandidates.length - 1];
     }
     if (finalTotalEl && !finalTotalEl.querySelector('#final-total-investment')) {
       // Insert a numeric-only span after the first '$' within the final TOTAL INVESTMENT label
@@ -3142,7 +5429,12 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       span.id = 'final-total-investment';
       span.className = 'total-investment-final';
       span.textContent = fmt(0).replace(/^\s*\$\s*/, '');
-      if (target && dollarIdx >= 0) {
+      // If we are inside the acceptance span with an <o:p>, place the total before <o:p>
+  let op: Element | null = null;
+  try { op = finalTotalEl.querySelector('o\\:p'); } catch { op = null; }
+      if (op) {
+        finalTotalEl.insertBefore(span, op);
+      } else if (target && dollarIdx >= 0) {
         const text = target.textContent || '';
         const before = text.slice(0, dollarIdx + 1);
         let after = text.slice(dollarIdx + 1);
@@ -3359,6 +5651,16 @@ export default function ProposalView({ params }: { params: { id: string } }) {
       return isInAny(el, set);
     };
 
+  // Strip secondary GBB pills from the "Please Check Selection" prompt row in Asphalt tables
+  try {
+    const promptRows = Array.from(root.querySelectorAll('tr[data-hidden-prompt="1"], tr[data-force-visible="1"]')) as HTMLTableRowElement[];
+    for (const r of promptRows) {
+      const text = (r.textContent || '').toUpperCase();
+      if (!/PLEASE\s+CHECK\s+SELECTION/.test(text)) continue;
+      Array.from(r.querySelectorAll('label.price-choice, input.proposal-price-checkbox')).forEach(el => (el as HTMLElement).remove());
+    }
+  } catch {}
+
   // Also add the Trim total container if marked, so generic wrappers skip it entirely
   try {
     const trimTotals = Array.from(root.querySelectorAll('[data-trim-total="1"]')) as HTMLElement[];
@@ -3367,6 +5669,27 @@ export default function ProposalView({ params }: { params: { id: string } }) {
 
   // Note: We intentionally skip the text-node walker to avoid duplicate injections across nested Word tags;
   // the supplemental per-element passes below handle both contiguous and cross-tag prices safely.
+
+  // Targeted fix: ensure POSSIBLE EXTRA CARPENTRY line keeps its template amounts in plain text
+  (function fixCarpentryClause() {
+    try {
+      const paras = Array.from(root.querySelectorAll('div.WordSection2 p.MsoNormal')) as HTMLElement[];
+      for (const p of paras) {
+        const txt = p.textContent || '';
+        if (!/(POSSIBLE\s+)?EXTRA\s+CARPENTRY/i.test(txt)) continue;
+        // Look for the following descriptive sentence and repair missing amounts
+        let html = p.innerHTML;
+  // Ensure exact template amounts
+  // rate 0 per man hour -> rate $90 per man hour
+  html = html.replace(/rate\s*0\s*per\s*man\s*hour/i, 'rate $90 per man hour');
+  // replace at per linear foot -> replace at $19.00 per linear foot
+  html = html.replace(/replace\s*at\s*(?:\$?\s*0)?\s*per\s*linear\s*foot/i, 'replace at $19.00 per linear foot');
+  // rate of per sheet -> rate of $120 per sheet
+  html = html.replace(/rate\s*of\s*(?:\$?\s*0)?\s*per\s*sheet/i, 'rate of $120 per sheet');
+        if (html !== p.innerHTML) p.innerHTML = html;
+      }
+    } catch {}
+  })();
 
   // Supplemental pass 1: per-element contiguous money replacement for any remaining prices without checkboxes
   {
